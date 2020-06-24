@@ -242,7 +242,9 @@ def Rollout(
     rg : numpy.random.Generator type
         This function now needs an external random generator from the numpy library.
     """
-    # Executive variables  
+    # Executive variables
+    prune_samples = int(math.ceil(0.2*N_samples)) #20% of total samples goes to obtain controls and discard the worst
+    NTOP=4 #Top 4 controls that are used in rest of samples
     cpus = n_workers
     parallel = False
     if cpus == 1:
@@ -269,34 +271,100 @@ def Rollout(
     if explotation: #Explotation step. Sampling all the expected values to chose greedy accordingly to rollout algorithm. 
         # Creation of an iterable with the action set to make the samples
         # R_ITER could explode in resources comsumption if the lookahead is greater than 1
-        # As it does a tree with Acion_set^lookahead branches to sample.
-        to_evaluate = R_ITER(env, H, cpus, alpha, K, lookahead, N_samples, H_args=H_args,
+        # As it does a tree with Acion_set^lookahead branches to sample. 
+
+
+        #Make an Iterable with some samples(prune_samples) to discard controls that are not promising.
+        to_evaluate = R_ITER(env, H, cpus, alpha, K, lookahead, prune_samples, H_args=H_args,
                         Min_obj=min_objective)
+               
         if parallel:
             # Execute the sampling in multiple threads of the cpu with map function
             # Usually this perfoms better than single thread for long trayectories/number of samples
             # If the trayectories are short, of the number of samples is little, a sequential run could perform better
-            p = Pool(processes=cpus)
-            costs = p.imap_unordered(sample_trayectory,
-                                    to_evaluate)
+            costs = [] 
+            chunk_trayectory= []
+            new_trayectories= []
+            #Sample few times all trajectories
+            p = Pool(processes=cpus)                      
+            costs = p.imap_unordered(sample_trayectory,to_evaluate)                     
+            p.close()
+            p.join()            
+            #Get only the best NTOP controls after some iterations based on the average cost
+            best_controls = sorted(costs, key = lambda x: x[1], reverse = False)[:NTOP]           
+            best_controls = [x[0] for x in best_controls]          
+            #Create new chunk size according to new controls
+            new_chunk= math.ceil(9*len(best_controls) / cpus)          
+            #Copy only trayectories that belong to selected controls and create
+            #the pooling structure according to cpus.            
+            i=0 
+            for element in to_evaluate.all_trayectories:
+                for branch in element:
+                    for ctrl in best_controls:                    
+                        if ctrl == branch[0]:
+                            if i < new_chunk:
+                                chunk_trayectory+= [branch]   
+                                i+=1   
+                            if i==new_chunk:
+                                new_trayectories+=[chunk_trayectory]  
+                                chunk_trayectory=[]
+                                i=0
+            new_trayectories+=[chunk_trayectory]  
+            if lookahead==1:
+                new_trayectories=to_evaluate.all_trayectories             
+            #Setting new values to iterable(Creating a new one will consume much time)
+            to_evaluate.all_trayectories=new_trayectories 
+            to_evaluate.j=0
+            to_evaluate.N_samples=N_samples- prune_samples    
+            costs = [] 
+            p = Pool(processes=cpus)                      
+            costs = p.imap_unordered(sample_trayectory,to_evaluate)
         else:
             # Execute an evaluation at a time in one cpu thread
+            chunk_trayectory= []
+            new_trayectories= []
             costs = []
             for i in to_evaluate:
-                costs.append(sample_trayectory(i))
+                costs.append(sample_trayectory(i))          
+            #Get only the best NTOP controls after some iterations based on the average cost
+            best_controls = sorted(costs, key = lambda x: x[1], reverse = False)[:NTOP] 
+            best_controls = [x[0] for x in best_controls]  
+            #Create new chunk size according to new controls
+            new_chunk= math.ceil(9*len(best_controls) / cpus)          
+            #Copy only trayectories that belong to selected controls
+            i=0 
+            for element in to_evaluate.all_trayectories:
+                for branch in element:
+                    if branch[0] in best_controls:
+                        if i < new_chunk:
+                            chunk_trayectory+= [branch]   
+                            i+=1   
+                        if i==new_chunk:
+                            new_trayectories+=[chunk_trayectory]  
+                            chunk_trayectory=[]
+                            i=0
+            new_trayectories+=[chunk_trayectory]           
+            #Setting new values to iterable(Creating a new one will consume much time)
+            to_evaluate.all_trayectories=new_trayectories 
+            to_evaluate.j=0
+            to_evaluate.N_samples=N_samples- prune_samples  
+            #Get Costs for bests controls
+            costs = []
+            for i in to_evaluate:
+                costs.append(sample_trayectory(i))            
         # costs is the list of the costs of the sampled trayectories from their respective action
         # As the greedy nature of the algorithm, the sample trayectory do only returns the first control
         # and the expected cost. Here we take that minimum not caring of the rest of the trayectory may have
-        # been. 
-        min_cost, r_action = objective*np.inf, None
-        for action, cost in costs:
+        # been.               
+        min_cost, r_action = objective*np.inf, None             
+        for action, cost in costs:                                
             if objective*cost < objective*min_cost:
                 r_action = action # Saving the action with less cost
-                min_cost = cost
+                min_cost = cost         
         if parallel: # Terminating the pool of processes in this rollout
             p.close()
             p.join()
-        del to_evaluate # Cleaning the iterable
+        del to_evaluate # Cleaning the iterable 
         return r_action, min_cost
         
     else: # Option to take an exploration step

@@ -41,15 +41,12 @@ if __name__ == '__main__':
         reward_empty = C_EMPTY, reward_hit = C_HIT, reward_step = C_STEP,
         reward_move = C_MOVE)
     H = heuristic.Heuristic
-    exp = rollout.Experiment(env, H, H_ARGS={'vision':1},
+    exp = rollout.Experiment(env, H, H_ARGS={'vision':1,'mode':2},
         N_TRAIN=N_TRAIN, N_STEPS=N_STEPS,N_SAMPLES=N_SAMPLES, 
         K=K_Rollout, LOOKAHEAD=LOOKAHEAD, MIN_OBJECTIVE=True, 
         N_WORKERS=-1, RUN_GIF=True)
     exp.run()
-    exp.make_gif(RUN=True,fps=7)
-    exp.LOOKAHEAD = 2
-    exp.run()
-    exp.make_gif(RUN=True,fps=7)
+    exp.make_gif(RUN=True,fps=7)    
     exp.policy_test(N_TEST=5,N_STEPS=N_STEPS)
     exp.make_gif(TEST=True,fps=7)
     exp.save_policy()

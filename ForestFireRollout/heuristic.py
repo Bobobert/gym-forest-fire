@@ -1,6 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Created on jun 2020
+Set of Heuristics 2.0
+
+Created on jun 2020 v1.0
+
+Modified on jun 2020 v2.0
+    Added Calculate_Fire_Coefficient: An Heuristic that calculates
+    for each zone a coefficient based on fire cells(+1), tree cells(+ p_fire)
+    and empty cells (+ p_tree) and divided by grid total cells.
+    Now args contain a 'mode', 1 for fire cells heuristic and 2  for coefficient heuristic.
 
 @author: MauMontenegro
 """
@@ -36,6 +44,7 @@ def Heuristic(args):
             raise "At least the argument {} is missing! Please do pass correct arguments".format(arg)
     env = args['env']
     vision = args['vision']
+    mode = args['mode']
     grid, pos, remain_steps = args['observation']
     
     #Add borders in Grid perimeter according to vision range of helicopter, in order
@@ -45,47 +54,71 @@ def Heuristic(args):
     #Get neighborhood in agent current position and vision range
     neighborhood= get_neighborhood(Pad_grid,pos,vision) 
     
-    #Count fire cells by zone(8 zones)    
+    #Count fire cells or fire coefficient by zone(8 zones)    
     burned_densities={}
     
     #Up Zone
     up_zone=neighborhood[ 0:neighborhood.shape[0]-(vision+1),0:neighborhood.shape[1]] #Get Up Zone
-    up_burned=Count_Burned_Trees(env,up_zone) #Get fire cells in up zone    
+    if mode==1: #Only count fire cells in a zone
+        up_burned=Count_Burned_Trees(env,up_zone)  
+    elif mode==2: #Calculate a coefficient of fire probability based on all cells
+        up_burned=Calculate_Fire_Coefficient(env,up_zone) 
     burned_densities["up"]=up_burned #Add zone and fire density to dictionary
     
     #Up Left Zone
     up_left_zone=neighborhood[ 0:neighborhood.shape[0]-(vision+1),0:neighborhood.shape[0]-(vision+1) ]
-    up_left_burned=Count_Burned_Trees(env,up_zone)   
+    if mode==1:
+        up_left_burned=Count_Burned_Trees(env,up_zone)
+    elif mode==2:
+        up_left_burned=Calculate_Fire_Coefficient(env,up_zone) 
     burned_densities["up_left"]=up_left_burned    
     
     #Up Right Zone
     up_right_zone=neighborhood[ 0:neighborhood.shape[0]-(vision+1),neighborhood.shape[0]-vision:neighborhood.shape[0] ]
-    up_right_burned=Count_Burned_Trees(env,up_right_zone)   
+    if mode==1:
+        up_right_burned=Count_Burned_Trees(env,up_right_zone)
+    elif mode==2:
+        up_right_burned=Calculate_Fire_Coefficient(env,up_right_zone)       
     burned_densities["up_right"]=up_right_burned    
     
     #Down Zone
     down_zone=neighborhood[ neighborhood.shape[0]-vision:neighborhood.shape[0],0:neighborhood.shape[1]]
-    down_burned=Count_Burned_Trees(env,down_zone)    
+    if mode==1:
+        down_burned=Count_Burned_Trees(env,down_zone) 
+    elif mode==2:
+        down_burned=Calculate_Fire_Coefficient(env,down_zone)      
     burned_densities["down"]=down_burned
     
     #Down Left
     down_left_zone=neighborhood[ neighborhood.shape[0]-vision:neighborhood.shape[0], 0:neighborhood.shape[0]-(vision+1) ]
-    down_left_burned=Count_Burned_Trees(env,down_left_zone)    
+    if mode==1:
+        down_left_burned=Count_Burned_Trees(env,down_left_zone)
+    elif mode==2:
+        down_left_burned=Calculate_Fire_Coefficient(env,down_left_zone)       
     burned_densities["down_left"]=down_left_burned    
     
     #Down Right
     down_right_zone=neighborhood[ neighborhood.shape[0]-vision:neighborhood.shape[0], neighborhood.shape[0]-vision:neighborhood.shape[0] ]
-    down_right_burned=Count_Burned_Trees(env,down_right_zone)   
+    if mode==1:
+        down_right_burned=Count_Burned_Trees(env,down_right_zone)
+    elif mode==2:
+        down_right_burned=Calculate_Fire_Coefficient(env,down_right_zone)      
     burned_densities["down_right"]=down_right_burned   
     
     #Left Zone
     left_zone=neighborhood[ 0:neighborhood.shape[0],0:neighborhood.shape[0]-(vision+1)]
-    left_burned=Count_Burned_Trees(env,left_zone)    
+    if mode==1:
+        left_burned=Count_Burned_Trees(env,left_zone)  
+    elif mode==2:
+        left_burned=Calculate_Fire_Coefficient(env,left_zone)     
     burned_densities["left"]=left_burned
     
     #Right Zone
     right_zone=neighborhood[ 0:neighborhood.shape[1],neighborhood.shape[0]-vision:neighborhood.shape[0]]
-    right_burned=Count_Burned_Trees(env,right_zone)   
+    if mode==1:
+        right_burned=Count_Burned_Trees(env,right_zone)
+    elif mode==2:
+        right_burned=Calculate_Fire_Coefficient(env,right_zone)      
     burned_densities["right"]=right_burned
     
     #Action based on burned trees/zone
@@ -149,6 +182,20 @@ def Count_Burned_Trees(env,zone):
             if zone[row][col]==env.fire:
                 counter+=1
     return counter
+
+#Receives a grid zone and calculate fire coefficient
+def Calculate_Fire_Coefficient(env,zone):    
+    coefficient=0
+    for row in range(zone.shape[0]):
+        for col in range(zone.shape[1]):
+            if zone[row][col]==env.fire:
+                coefficient+=1
+            if zone[row][col]==env.tree:
+                coefficient+=env.p_fire
+            if zone[row][col]==env.empty:
+                coefficient-=env.p_tree
+    coefficient=coefficient/(zone.shape[0]*zone.shape[1])    
+    return coefficient
 
 #Get neighborhood of agent according to vision range
 def get_neighborhood(grid,pos,vision):

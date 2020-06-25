@@ -427,8 +427,7 @@ def sample_trayectories(grid,
                         costs, 
                         trayectories, 
                         random_states, 
-                        results,
-                        ):
+                        results):
     """
     New function to sample all the trayectories individually from all the posible
     trayctories and the samples; for each there's a repeated trayectory. This is made this way
@@ -556,7 +555,9 @@ def helicopter_step(grid,
     # and wont count.
     it_moved = 1.0
     delta_row, delta_col = 0, 0
-    if (action == 1) or (action == 2) or (action == 3):
+    if action == 5:
+        0.0
+    elif (action == 1) or (action == 2) or (action == 3):
         delta_row = -1
     elif (action == 7) or (action == 8) or (action == 9):
         delta_row = 1
@@ -601,7 +602,7 @@ def helicopter_step(grid,
     # Calculating cost. 
     ### This is the cost shape for a given state ### 
     ### This is the same as 'custom' type on Helicopter Env ###
-    cost = 0.
+    cost = 0.0
     cost += costs[0]*trees
     cost += costs[1]*fires
     cost += costs[2]*empties
@@ -762,27 +763,3 @@ def sampler(env,
         SAMPLER_CONST['L_AS'] =  9
 
     return best_action, best_cost, avg_costs_action
-
-
-if __name__ == '__main__':
-    import helicopter
-    env = helicopter.EnvMakerForestFire(n_row=30,n_col=30)
-    best_action, best_cost, avg_cost = sampler(env, h_mode=21,
-        lookahead=2, n_samples=50)
-    print("Best action: {} Cost: {}".format(best_action, best_cost))
-    print(avg_cost)
-    env.reset()
-    best_action, best_cost, avg_cost = sampler(env, h_mode=22,
-        lookahead=2, n_samples=150)
-    print("Best action: {} Cost: {}".format(best_action, best_cost))
-    print(avg_cost)
-    env.reset()
-    best_action, best_cost, avg_cost = sampler(env, h_mode=11,
-        lookahead=2, n_samples=150)
-    print("Best action: {} Cost: {}".format(best_action, best_cost))
-    print(avg_cost)
-    env.reset()
-    best_action, best_cost, avg_cost = sampler(env, h_mode=12,
-        lookahead=3, n_samples=50)
-    print("Best action: {} Cost: {}".format(best_action, best_cost))
-    print(avg_cost)

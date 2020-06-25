@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Created on jun 2020
-v 0.2
+v 0.3
 
 @author: bobobert
 
@@ -31,11 +31,7 @@ warnings.simplefilter('ignore', category=NumbaPendingDeprecationWarning)
 # These values needs to be here an declared for the compiler. One can change
 # then before to create any kernel
 
-# GTX1050 can't support the 10**5 array on shared memory
-THREADSPREAD = 64 # This could not work in your GPU! Check the SM from your
-# Nvidia Card. Pascal series GTX 10XX this is adequate, that arquitecture support
-# up to 128 CUDA per SM
-# RTX 20XX supports 64 CUDA per SM
+THREADSPREAD = 64
 
 NPTFLOAT = np.float32
 NPTINT = np.int16
@@ -76,7 +72,7 @@ def Heuristic(local_grid, pos_row, pos_col, steps_to_update, parameters, probs, 
     elif h_mode == 11:
         # Heuristic from Mau
         # Corrective, vision = 1
-        action = 0
+        action = 5
         VISION = 1
         burned = 0
         # Count the burned cells on the neighborhood
@@ -109,214 +105,217 @@ def Heuristic(local_grid, pos_row, pos_col, steps_to_update, parameters, probs, 
         return action
 
     elif h_mode == 12:
-        # Heuristic from Mau
-        # Corrective, vision = 2
-        action = 0
-        VISION = 2
-        NS = 3 + 2 * VISION
-        cb = cuda.local.array(9, dtype=NBTINT)
-        for i in range(9):
-            cb[i] = 0
-        # top_left top  top_right  left  --  rigth down_left  down  down_right
-        #    0      1       2        3    4    5       6       7        8
-        # Count the burned cells on the neighborhood
-        for i in range(pos_row - VISION, pos_col + VISION + 1):
-            for j in range(pos_col - VISION, pos_col + VISION + 1):
-                if (i < 0) and (i >= GRID_SIZE[0]):
-                    0.0
-                elif (j < 0) and (j >= GRID_SIZE[1]):
-                    0.0 # Out of boundaries
-                elif local_grid[i,j] == FIRE:
-                    if (i >= 0 ) and (i < 1 + VISION) and (j >= 0) and (j < NS):
-                        #Up zone
-                        cb[1] += 1
-                    elif (i >= 0 ) and (i < 1 + VISION) and (j >= 0) and (j < 1 + VISION):
-                        #Up left zone
-                        cb[0] += 1
-                    elif (i >= 0 ) and (i < 1 + VISION) and (j > 1 + VISION) and (j < NS):
-                        #Up rigth zone
-                        cb[2] += 1
-                    elif (i > 1 + VISION) and (i < NS) and (j >= 0 ) and (j < NS):
-                        # Down zone
-                        cb[7] += 1
-                    elif (i > 1 + VISION) and (i < NS) and (j >= 0) and (j < 1 + VISION):
-                        #Down left zone
-                        cb[6] += 1
-                    elif (i > 1 + VISION) and (i < NS) and (j > 1 + VISION) and (j < NS):
-                        #Down right zone
-                        cb[8] += 1
-                    elif (i >= 0) and (i < NS) and (j >= 0) and (j < 1 + VISION):
-                        #Left zone
-                        cb[3] += 1
-                    elif (i >= 0) and (i < NS) and (j > 1 + VISION ) and (j < NS):
-                        #Right zone
-                        cb[5] += 1
-
-        non_zero = 0
-        for i in range(9):
-            if cb[i] > 0:
-                non_zero += 1
-        if non_zero == 0:
-            for i in range(1, 10):
-                if rdm_uniform_sample(random_states, worker) < 0.112:
-                    action = i
-        else:
-            p = 1 / non_zero
-            max_yeet = 0        
-            for i in range(9):
-                if cb[i] > max_yeet:
-                    action = i + 1
-                    max_yeet = cb[i]
-                elif cb[i] == max_yeet:
-                    if rdm_uniform_sample(random_states, worker) < p:
-                        action = i + 1
-        return action
-
+        return CONSERVATIVE(local_grid, pos_row, pos_col, steps_to_update, parameters, probs, costs, random_states, worker, 2)
     elif h_mode == 21:
-        # Heuristic preventive vision 1
-        # based on Mau's
+        return PREVENTIVE(local_grid, pos_row, pos_col, steps_to_update, parameters, probs, costs, random_states, worker, 1)
+    elif h_mode == 22:
+        return PREVENTIVE(local_grid, pos_row, pos_col, steps_to_update, parameters, probs, costs, random_states, worker, 2)
 
-        """def calc_coef(cell): # This seems not be working properly...
-            coef = 0.0
-            if cell == FIRE:
-                coef += 1.0
-            elif cell == TREE:
-                coef += probs[0]
-            elif cell == EMPTY:
-                coef -= probs[1]
-            return coef"""
-        
-        action = 0
-        VISION = 1
-        NS = 3 + 2 * VISION
-        cb = cuda.local.array(9, dtype=NBTFLOAT)
-        cz = cuda.local.array(9, dtype=NBTINT)
-        for i in range(9):
-            cb[i] = 0.0
-            cz[i] = 0
-        # top_left top  top_right  left  --  rigth down_left  down  down_right
-        #    0      1       2        3    4    5       6       7        8
-        # Count the burned cells on the neighborhood
-        for i in range(pos_row - VISION, pos_col + VISION + 1):
-            for j in range(pos_col - VISION, pos_col + VISION + 1):
-                if (i < 0) and (i >= GRID_SIZE[0]):
-                    0.0
-                elif (j < 0) and (j >= GRID_SIZE[1]):
-                    0.0 # Out of boundaries
-                else:
-                    if (i >= 0 ) and (i < 1 + VISION) and (j >= 0) and (j < NS):
-                        #Up zone
-                        coef = 0.0
-                        if local_grid[i, j] == FIRE:
-                            coef += 1.0
-                        elif local_grid[i, j] == TREE:
-                            coef += probs[0]
-                        elif local_grid[i, j] == EMPTY:
-                            coef -= probs[1]
-                        cb[1] += coef
-                        cz[1] += 1
-                    elif (i >= 0 ) and (i < 1 + VISION) and (j >= 0) and (j < 1 + VISION):
-                        #Up left zone
-                        coef = 0.0
-                        if local_grid[i, j] == FIRE:
-                            coef += 1.0
-                        elif local_grid[i, j] == TREE:
-                            coef += probs[0]
-                        elif local_grid[i, j] == EMPTY:
-                            coef -= probs[1]
-                        cb[0] += coef
-                        cz[0] += 1
-                    elif (i >= 0 ) and (i < 1 + VISION) and (j > 1 + VISION) and (j < NS):
-                        #Up rigth zone
-                        coef = 0.0
-                        if local_grid[i, j] == FIRE:
-                            coef += 1.0
-                        elif local_grid[i, j] == TREE:
-                            coef += probs[0]
-                        elif local_grid[i, j] == EMPTY:
-                            coef -= probs[1]
-                        cb[2] += coef
-                        cz[2] += 1
-                    elif (i > 1 + VISION) and (i < NS) and (j >= 0 ) and (j < NS):
-                        # Down zone
-                        coef = 0.0
-                        if local_grid[i, j] == FIRE:
-                            coef += 1.0
-                        elif local_grid[i, j] == TREE:
-                            coef += probs[0]
-                        elif local_grid[i, j] == EMPTY:
-                            coef -= probs[1]
-                        cb[7] += coef
-                        cz[7] += 1
-                    elif (i > 1 + VISION) and (i < NS) and (j >= 0) and (j < 1 + VISION):
-                        #Down left zone
-                        coef = 0.0
-                        if local_grid[i, j] == FIRE:
-                            coef += 1.0
-                        elif local_grid[i, j] == TREE:
-                            coef += probs[0]
-                        elif local_grid[i, j] == EMPTY:
-                            coef -= probs[1]
-                        cb[6] += coef
-                        cz[6] += 1
-                    elif (i > 1 + VISION) and (i < NS) and (j > 1 + VISION) and (j < NS):
-                        #Down right zone
-                        coef = 0.0
-                        if local_grid[i, j] == FIRE:
-                            coef += 1.0
-                        elif local_grid[i, j] == TREE:
-                            coef += probs[0]
-                        elif local_grid[i, j] == EMPTY:
-                            coef -= probs[1]
-                        cb[8] += coef
-                        cz[8] += 1
-                    elif (i >= 0) and (i < NS) and (j >= 0) and (j < 1 + VISION):
-                        #Left zone
-                        coef = 0.0
-                        if local_grid[i, j] == FIRE:
-                            coef += 1.0
-                        elif local_grid[i, j] == TREE:
-                            coef += probs[0]
-                        elif local_grid[i, j] == EMPTY:
-                            coef -= probs[1]
-                        cb[3] += coef
-                        cz[3] += 1
-                    elif (i >= 0) and (i < NS) and (j > 1 + VISION ) and (j < NS):
-                        #Right zone
-                        coef = 0.0
-                        if local_grid[i, j] == FIRE:
-                            coef += 1.0
-                        elif local_grid[i, j] == TREE:
-                            coef += probs[0]
-                        elif local_grid[i, j] == EMPTY:
-                            coef -= probs[1]
-                        cb[5] += coef
-                        cz[5] += 1
+@cuda.jit(device=True)
+def CONSERVATIVE(local_grid, pos_row, pos_col, steps_to_update, parameters, probs, costs, random_states, worker, VISION):
+    # Heuristic from Mau
+    # Corrective, vision = 2
+    action = 5
+    NS = 3 + 2 * VISION
+    cb = cuda.local.array(9, dtype=NBTINT)
+    for i in range(9):
+        cb[i] = 0
+    # top_left top  top_right  left  --  rigth down_left  down  down_right
+    #    0      1       2        3    4    5       6       7        8
+    # Count the burned cells on the neighborhood
+    for i in range(pos_row - VISION, pos_col + VISION + 1):
+        for j in range(pos_col - VISION, pos_col + VISION + 1):
+            if (i < 0) and (i >= GRID_SIZE[0]):
+                0.0
+            elif (j < 0) and (j >= GRID_SIZE[1]):
+                0.0 # Out of boundaries
+            elif local_grid[i,j] == FIRE:
+                if (i >= 0 ) and (i < 1 + VISION) and (j >= 0) and (j < NS):
+                    #Up zone
+                    cb[1] += 1
+                elif (i >= 0 ) and (i < 1 + VISION) and (j >= 0) and (j < 1 + VISION):
+                    #Up left zone
+                    cb[0] += 1
+                elif (i >= 0 ) and (i < 1 + VISION) and (j > 1 + VISION) and (j < NS):
+                    #Up rigth zone
+                    cb[2] += 1
+                elif (i > 1 + VISION) and (i < NS) and (j >= 0 ) and (j < NS):
+                    # Down zone
+                    cb[7] += 1
+                elif (i > 1 + VISION) and (i < NS) and (j >= 0) and (j < 1 + VISION):
+                    #Down left zone
+                    cb[6] += 1
+                elif (i > 1 + VISION) and (i < NS) and (j > 1 + VISION) and (j < NS):
+                    #Down right zone
+                    cb[8] += 1
+                elif (i >= 0) and (i < NS) and (j >= 0) and (j < 1 + VISION):
+                    #Left zone
+                    cb[3] += 1
+                elif (i >= 0) and (i < NS) and (j > 1 + VISION ) and (j < NS):
+                    #Right zone
+                    cb[5] += 1
 
+    non_zero = 0
+    for i in range(9):
+        if cb[i] > 0:
+            non_zero += 1
+    if non_zero == 0:
+        for i in range(1, 10):
+            if rdm_uniform_sample(random_states, worker) < 0.112:
+                action = i
+    else:
+        p = 1 / non_zero
+        max_yeet = 0        
         for i in range(9):
-            # Normalize the coefficients
-            cb[i] = cb[i] / cz[i]
-
-        non_zero = 0
-        for i in range(9):
-            if cb[i] > 0:
-                non_zero += 1
-        if non_zero == 0:
-            for i in range(1, 10):
-                if rdm_uniform_sample(random_states, worker) < 0.112:
-                    action = i
-        else:
-            p = 1 / non_zero
-            max_yeet = 0.0
-            for i in range(9):
-                if cb[i] > max_yeet:
+            if cb[i] > max_yeet:
+                action = i + 1
+                max_yeet = cb[i]
+            elif cb[i] == max_yeet:
+                if rdm_uniform_sample(random_states, worker) < p:
                     action = i + 1
-                    max_yeet = cb[i]
-                elif cb[i] == max_yeet:
-                    if rdm_uniform_sample(random_states, worker) < p:
-                        action = i + 1
-        return action
+    return action
 
+@cuda.jit(device=True)
+def PREVENTIVE(local_grid, pos_row, pos_col, steps_to_update, parameters, probs, costs, random_states, worker, VISION):
+    # Heuristic preventive variable vision
+    # based on Mau's
+    action = 5
+    VISION = 1
+    NS = 3 + 2 * VISION
+    cb = cuda.local.array(9, dtype=NBTFLOAT)
+    cz = cuda.local.array(9, dtype=NBTINT)
+    for i in range(9):
+        cb[i] = 0.0
+        cz[i] = 0
+    # Function coefficients
+    Fire_coef = 2.0
+    Tree_coef = 0.5
+    Empty_coef = 0.5
+    # top_left top  top_right  left  --  rigth down_left  down  down_right
+    #    0      1       2        3    4    5       6       7        8
+    # Count the burned cells on the neighborhood
+    for i in range(pos_row - VISION, pos_col + VISION + 1):
+        for j in range(pos_col - VISION, pos_col + VISION + 1):
+            if (i < 0) and (i >= GRID_SIZE[0]):
+                0.0
+            elif (j < 0) and (j >= GRID_SIZE[1]):
+                0.0 # Out of boundaries
+            else:
+                if (i >= 0 ) and (i < 1 + VISION) and (j >= 0) and (j < NS):
+                    #Up zone
+                    coef = 0.0
+                    if local_grid[i, j] == FIRE:
+                        coef += Fire_coef
+                    elif local_grid[i, j] == TREE:
+                        coef += Tree_coef
+                    elif local_grid[i, j] == EMPTY:
+                        coef -= Empty_coef
+                    cb[1] += coef
+                    cz[1] += 1
+                elif (i >= 0 ) and (i < 1 + VISION) and (j >= 0) and (j < 1 + VISION):
+                    #Up left zone
+                    coef = 0.0
+                    if local_grid[i, j] == FIRE:
+                        coef += Fire_coef
+                    elif local_grid[i, j] == TREE:
+                        coef += Tree_coef
+                    elif local_grid[i, j] == EMPTY:
+                        coef -= Empty_coef
+                    cb[0] += coef
+                    cz[0] += 1
+                elif (i >= 0 ) and (i < 1 + VISION) and (j > 1 + VISION) and (j < NS):
+                    #Up rigth zone
+                    coef = 0.0
+                    if local_grid[i, j] == FIRE:
+                        coef += Fire_coef
+                    elif local_grid[i, j] == TREE:
+                        coef += Tree_coef
+                    elif local_grid[i, j] == EMPTY:
+                        coef -= Empty_coef
+                    cb[2] += coef
+                    cz[2] += 1
+                elif (i > 1 + VISION) and (i < NS) and (j >= 0 ) and (j < NS):
+                    # Down zone
+                    coef = 0.0
+                    if local_grid[i, j] == FIRE:
+                        coef += Fire_coef
+                    elif local_grid[i, j] == TREE:
+                        coef += Tree_coef
+                    elif local_grid[i, j] == EMPTY:
+                        coef -= Empty_coef
+                    cb[7] += coef
+                    cz[7] += 1
+                elif (i > 1 + VISION) and (i < NS) and (j >= 0) and (j < 1 + VISION):
+                    #Down left zone
+                    coef = 0.0
+                    if local_grid[i, j] == FIRE:
+                        coef += Fire_coef
+                    elif local_grid[i, j] == TREE:
+                        coef += Tree_coef
+                    elif local_grid[i, j] == EMPTY:
+                        coef -= Empty_coef
+                    cb[6] += coef
+                    cz[6] += 1
+                elif (i > 1 + VISION) and (i < NS) and (j > 1 + VISION) and (j < NS):
+                    #Down right zone
+                    coef = 0.0
+                    if local_grid[i, j] == FIRE:
+                        coef += Fire_coef
+                    elif local_grid[i, j] == TREE:
+                        coef += Tree_coef
+                    elif local_grid[i, j] == EMPTY:
+                        coef -= Empty_coef
+                    cb[8] += coef
+                    cz[8] += 1
+                elif (i >= 0) and (i < NS) and (j >= 0) and (j < 1 + VISION):
+                    #Left zone
+                    coef = 0.0
+                    if local_grid[i, j] == FIRE:
+                        coef += Fire_coef
+                    elif local_grid[i, j] == TREE:
+                        coef += Tree_coef
+                    elif local_grid[i, j] == EMPTY:
+                        coef -= Empty_coef
+                    cb[3] += coef
+                    cz[3] += 1
+                elif (i >= 0) and (i < NS) and (j > 1 + VISION ) and (j < NS):
+                    #Right zone
+                    coef = 0.0
+                    if local_grid[i, j] == FIRE:
+                        coef += Fire_coef
+                    elif local_grid[i, j] == TREE:
+                        coef += Tree_coef
+                    elif local_grid[i, j] == EMPTY:
+                        coef -= Empty_coef
+                    cb[5] += coef
+                    cz[5] += 1
+
+    for i in range(9):
+        # Normalize the coefficients
+        if cz[i] != 0:
+            cb[i] = cb[i] / cz[i]
+        else:
+            cb[i] = 0
+
+    non_zero = 0
+    for i in range(9):
+        if cb[i] > 0:
+            non_zero += 1
+    if non_zero == 0:
+        for i in range(1, 10):
+            if rdm_uniform_sample(random_states, worker) < 0.112:
+                action = i
+    else:
+        p = 1 / non_zero
+        max_yeet = 0.0
+        for i in range(9):
+            if cb[i] > max_yeet:
+                action = i + 1
+                max_yeet = cb[i]
+            elif cb[i] == max_yeet:
+                if rdm_uniform_sample(random_states, worker) < p:
+                    action = i + 1
+    return action
 ############## END OF IT ################
 
 
@@ -428,7 +427,8 @@ def sample_trayectories(grid,
                         costs, 
                         trayectories, 
                         random_states, 
-                        results):
+                        results,
+                        ):
     """
     New function to sample all the trayectories individually from all the posible
     trayctories and the samples; for each there's a repeated trayectory. This is made this way
@@ -436,19 +436,19 @@ def sample_trayectories(grid,
     Very ad-hoc for the forest fire environment
     """
     # Loading in shared memory everything needed to sample.
-    env_initial_state = cuda.shared.array(GRID_SIZE, dtype=NBTINT)
+    env_initial_state = cuda.shared.array(GRID_SIZE, dtype=nb.int8)
     for i in range(GRID_SIZE[0]):
         for j in range(GRID_SIZE[1]):
-            env_initial_state[i,j] = grid[i,j] # Probably backwards
+            env_initial_state[i,j] = grid[i,j]
 
     # Starting linear addressing of the samples
     worker = cuda.grid(1)
 
     if worker < trayectories.shape[0]:
         # A local copy of the grid
-        local_grid = cuda.local.array(GRID_SIZE, dtype=NBTINT)
+        local_grid = cuda.local.array(GRID_SIZE, dtype=nb.int8)
         # Updated works to generate a copy from here to better behavior
-        updated_grid = cuda.local.array(GRID_SIZE, dtype=NBTINT)
+        updated_grid = cuda.local.array(GRID_SIZE, dtype=nb.int8)
         for i in range(GRID_SIZE[0]):
             for j in range(GRID_SIZE[1]):
                 local_grid[i,j] = env_initial_state[i,j]
@@ -512,21 +512,10 @@ def helicopter_step(grid,
     # Check if the grid needs to be updated
     if steps_before_update == 0:
         # Generating the random values
-        lightnings = cuda.local.array(GRID_SIZE, dtype=NBTINT)
+        throws = cuda.local.array(GRID_SIZE, dtype=NBTFLOAT)
         for i in range(GRID_SIZE[0]):
             for j in range(GRID_SIZE[1]):
-                if rdm_uniform_sample(random_states, worker) < probs[0]:
-                    lightnings[i,j] = 1
-                else:
-                    lightnings[i,j] = 0
-
-        sprouts = cuda.local.array(GRID_SIZE, dtype=NBTINT)
-        for i in range(GRID_SIZE[0]):
-            for j in range(GRID_SIZE[1]):
-                if rdm_uniform_sample(random_states, worker) < probs[1]:
-                    sprouts[i,j] = 1
-                else:
-                    sprouts[i,j] = 0
+                throws[i,j] = rdm_uniform_sample(random_states, worker)
 
         # Begin the update of the grid.
         for i in range(GRID_SIZE[0]):
@@ -548,11 +537,11 @@ def helicopter_step(grid,
                     updated_grid[i,j] = EMPTY
                 # If it's a tree, throw a dice to a lighting to
                 # hit it or not
-                elif (grid[i,j] == TREE) and (lightnings[i,j] > 0):
+                elif (grid[i,j] == TREE) and (throws[i,j] <= probs[0]):
                         # The tree is hitted by a ligthning
                         updated_grid[i,j] = FIRE
                 # If the cell it's empty, it has a chance to grow a tree
-                elif (grid[i,j] == EMPTY) and (sprouts[i,j] > 0):
+                elif (grid[i,j] == EMPTY) and (throws[i,j] <= probs[1]):
                         # A tree growns in this cell
                         updated_grid[i,j] = TREE
         new_steps_before_updating = parameters[3] # Restarting
@@ -567,13 +556,13 @@ def helicopter_step(grid,
     # and wont count.
     it_moved = 1.0
     delta_row, delta_col = 0, 0
-    if action in [1,2,3]:
+    if (action == 1) or (action == 2) or (action == 3):
         delta_row = -1
-    elif action in [7,8,9]:
+    elif (action == 7) or (action == 8) or (action == 9):
         delta_row = 1
-    if action in [1,4,7]:
+    if (action == 1) or (action == 4) or (action == 7):
         delta_col = -1
-    elif action in [3,6,9]:
+    elif (action == 3) or (action == 6) or (action == 9):
         delta_col = 1
 
     new_pos_row = pos_row + delta_row
@@ -655,6 +644,9 @@ def min_max(trayectories, results, n_samples, action_set, min_obj):
         if obj*c < obj*best_cost:
             best_cost = c
             best_action = action_set[i]
+        elif obj*c == obj*best_cost:
+            if np.random.random() < 0.112:
+                best_action = action_set[i]
 
     action_avg = np.zeros((l_as,2), dtype=NPTFLOAT)
     for i in range(l_as):
@@ -728,7 +720,6 @@ def sampler(env,
         SAMPLER_CONST['L_AS'] =  len(action_set)
     # Generating the trayectories from the tree leafs
     trayectories = get_leafs(ACTION_SET, LOOKAHEAD, 1)
-    #print("Tree done")
     # Copying to device
     d_trayectories = cuda.to_device(trayectories)
     d_results = cuda.device_array(trayectories.shape[0],dtype=NPTFLOAT)
@@ -754,16 +745,14 @@ def sampler(env,
         h_mode=h_mode,
         k=k
     )
-    #print("Loading done")
     # Starting the kernel on the device to sample the trayectories
     results = []
-    for _ in range(N_SAMPLES):
+    for _ in range(n_samples):
         sample_trayectories[blockspread, threadspread](d_grid, \
             d_probs, d_params, d_costs, d_trayectories, random_states, d_results)
         # Retriving to host the samples results                        (grid, probs, parameters, costs, trayectories, random_states, results)
         results.append(d_results.copy_to_host())
     # Applying objective
-    #print("Kernel done")
     results = np.array(results)
     best_action, best_cost, avg_costs_action = min_max(trayectories, results, N_SAMPLES, ACTION_SET, min_obj)
 
@@ -773,3 +762,27 @@ def sampler(env,
         SAMPLER_CONST['L_AS'] =  9
 
     return best_action, best_cost, avg_costs_action
+
+
+if __name__ == '__main__':
+    import helicopter
+    env = helicopter.EnvMakerForestFire(n_row=30,n_col=30)
+    best_action, best_cost, avg_cost = sampler(env, h_mode=21,
+        lookahead=2, n_samples=50)
+    print("Best action: {} Cost: {}".format(best_action, best_cost))
+    print(avg_cost)
+    env.reset()
+    best_action, best_cost, avg_cost = sampler(env, h_mode=22,
+        lookahead=2, n_samples=150)
+    print("Best action: {} Cost: {}".format(best_action, best_cost))
+    print(avg_cost)
+    env.reset()
+    best_action, best_cost, avg_cost = sampler(env, h_mode=11,
+        lookahead=2, n_samples=150)
+    print("Best action: {} Cost: {}".format(best_action, best_cost))
+    print(avg_cost)
+    env.reset()
+    best_action, best_cost, avg_cost = sampler(env, h_mode=12,
+        lookahead=3, n_samples=50)
+    print("Best action: {} Cost: {}".format(best_action, best_cost))
+    print(avg_cost)

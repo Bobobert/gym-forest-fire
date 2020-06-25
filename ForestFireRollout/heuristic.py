@@ -230,11 +230,11 @@ def Calculate_Fire_Coefficient(env,zone):
     for row in range(zone.shape[0]):
         for col in range(zone.shape[1]):
             if zone[row][col]==env.fire:
-                coefficient+=1
+                coefficient+=2.0
             if zone[row][col]==env.tree:
-                coefficient+=env.p_fire
+                coefficient+=0.5
             if zone[row][col]==env.empty:
-                coefficient-=env.p_tree
+                coefficient-=0.5
     try:#RWH
         coefficient=coefficient/(zone.shape[0]*zone.shape[1])
     except:

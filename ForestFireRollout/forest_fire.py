@@ -246,6 +246,8 @@ class ForestFire():
         n_row = grid.shape[0]
         n_col = grid.shape[1]
         new_grid = grid.copy()
+        throws = self.rg.random(size=self.grid.shape) #RWH
+        s = self.rg.choice([True, False], size=self.grid.shape, p=[self.p_fire, 1 - self.p_fire])
         for row in range(n_row):
             for col in range(n_col):
                 if grid[row][col] == self.tree and self.fire_around(grid, row, col, self.boundary):
@@ -253,13 +255,11 @@ class ForestFire():
                     new_grid[row][col] = self.fire
                 elif grid[row][col] == self.tree:
                     # Roll a dice for a lightning strike
-                    strike = self.rg.choice([True, False], 1, p=[p_fire, 1-p_fire])[0]
-                    if strike:
+                    if throws[row][col] <= self.p_fire:
                        new_grid[row][col] = self.fire 
                 elif grid[row][col] == self.empty:
                     # Roll a dice for a growing bush
-                    growth = self.rg.choice([True, False], 1, p=[p_tree, 1-p_tree])[0]
-                    if growth:
+                    if throws[row][col] <= self.p_tree:
                        new_grid[row][col] = self.tree
                 elif grid[row][col] == self.fire:
                     # Consume fire

@@ -19,8 +19,10 @@ import os
 
 #Misc for looks and graphs.
 import tqdm
-import time
+import time as Time
 import matplotlib.pyplot as plt
+import matplotlib.colors as clrs
+import seaborn as sns
 import imageio
 import pickle
 import re
@@ -412,13 +414,14 @@ class Experiment():
         self.epsilon_decay = check_prob(EPSILON_DECAY)
 
         self.init_logger = False
+        self.last_time = 0
         self.init_logger = self.logger("Logger initialized.",False)
         self.logger(" - GPU Experiment -",False, False)
-        env_desc = "Environment Parameters -- Grid: {} Cost_f: {} Cost_Tree: {} Cost_Fire: {} Cost_hit: {}\n\
+        env_desc = "Environment Parameters -- Grid: {} Cost_f: '{}'\n Cost_Tree: {} Cost_Fire: {} Cost_hit: {}\n\
             Cost_Empty: {} Cost_step: {} Cost_move: {}\n\
-            Min_obj: {} P_Fire: {} P_Tree: {} H_mode: {}\n".format(ENV.grid.shape, ENV.reward_type, ENV.reward_tree, ENV.reward_fire, ENV.reward_hit,
+            Min_obj: {} P_Fire: {} P_Tree: {}\n".format(ENV.grid.shape, ENV.reward_type, ENV.reward_tree, ENV.reward_fire, ENV.reward_hit,
             ENV.reward_empty, ENV.reward_step, ENV.reward_move,
-            MIN_OBJECTIVE, ENV.p_fire, ENV.p_tree, H_mode)
+            MIN_OBJECTIVE, ENV.p_fire, ENV.p_tree,)
         self.logger(env_desc,False,False)
 
         # This class has its own random generator.
@@ -427,6 +430,8 @@ class Experiment():
         self.runs_rollout_results_step = []
         self.runs_heu_results = []
         self.runs_heu_results_step = []
+        self.runs_rollout_archive = []
+        self.runs_heu_archive = []
         self.c_runs = 0
         self.theres_run_gif = False
         self.theres_test_gif = False
@@ -444,6 +449,24 @@ class Experiment():
         del self.env
         del self.PI
         return None
+
+    def reset(self):
+        # Free memory.
+        self.env.checkpoints = []
+        self.env_h.checkpoints = []
+        self.runs_rollout_results = []
+        self.runs_rollout_results_step = []
+        self.runs_heu_results = []
+        self.runs_heu_results_step = []
+        self.runs_rollout_archive = []
+        self.runs_heu_archive = []
+        self.frames_run_r = []
+        self.frames_run_h = []
+        self.frames_test_r = []
+        self.theres_run_gif = False
+        self.theres_test_gif = False
+        self.c_runs = 0
+        self.epsilon = self.epsilon_op
 
     def run(self, GIF=None, GRAPH=True):
         """
@@ -464,9 +487,6 @@ class Experiment():
             RUN_GIF = GIF
         else:
             RUN_GIF = self.RUN_GIF
-        self.logger("Run {} - Metadata: alpha-{} epsilon-{} epsilon_decay-{} k-{} LH-{} n_samples-{} H_mode-{}".format(
-            self.c_runs, self.alpha, self.epsilon_op, self.epsilon_decay, self.K, self.LOOKAHEAD, self.N_SAMPLES, self.H_mode), time=False)
-        self.logger(" |")
         # Reseting env and storing the initial observations
         observation = self.env.reset()
         observation_1 = observation
@@ -481,7 +501,7 @@ class Experiment():
         RO_RESULTS_C=[]
         H_RESULTS_C=[]
         # Measuring time of execution. 
-        start = time.time()
+        self.logger("Run {} - Metadata: {}\n |".format(self.c_runs, self.metadata_str), True, True, True)
         # First loop to execute an rollout experiment.
         for n_test in range(self.N_TRAIN):
             # In order to compare the advance between the two environments
@@ -559,11 +579,8 @@ class Experiment():
             RO_RESULTS_C.append(rollout_cost_step)
             H_RESULTS_C.append(heuristic_cost_step)
         msg = " | Run {} done.".format(self.c_runs)
-        msg+= "\nMetadata: alpha-{} epsilon-{} epsilon_decay-{} k-{} LH-{} n_samples-{} H_mode-{}".format(
-                self.alpha, self.epsilon_op, self.epsilon_decay, self.K, self.LOOKAHEAD, self.N_SAMPLES, self.H_mode)
-        self.logger(msg, time=False)
-        total_time = time.time() - start
-        self.logger("Total run time {}h: {}m: {}s".format(int(total_time//3600), int(total_time//60 - total_time//3600), int(total_time % 60)))
+        msg+= "\nMetadata: {}\n |".format(self.metadata_str)
+        self.logger(msg, True, True, True)
 
         # Saving to the class
         self.runs_rollout_results += RO_RESULTS
@@ -571,7 +588,7 @@ class Experiment():
         self.runs_heu_results += H_RESULTS
         self.runs_heu_results_step += H_RESULTS_C
         if GRAPH:
-            self.make_graph(title_head='Run {}'.format(self.c_runs), mod=self.mod)
+            self.make_graph(title_head='Run:{} H:{} LH:{}'.format(self.c_runs,self.H_mode,self.LOOKAHEAD), mod=self.mod)
         self.c_runs += 1
         # Saving data to generate gif
         if RUN_GIF: 
@@ -582,23 +599,6 @@ class Experiment():
             self.theres_run_gif = True
         
         return None
-
-    def reset(self):
-        # Free memory.
-        self.env.checkpoints = []
-        self.env_h.checkpoints = []
-        self.runs_rollout_results = []
-        self.runs_rollout_results_step = []
-        self.runs_heu_results = []
-        self.runs_heu_results_step = []
-        self.frames_run_r = []
-        self.frames_run_h = []
-        self.frames_test_r = []
-        self.theres_run_gif = False
-        self.theres_test_gif = False
-        self.c_runs = 0
-        self.epsilon = self.epsilon_op
-
     
     def policy_test(self, N_TEST=5, N_STEPS=20, PI_MODE=None, EPSILON=None, GIF=True,
     GRAPH=True):
@@ -630,12 +630,9 @@ class Experiment():
             RUN_GIF = GIF
         else:
             RUN_GIF = self.RUN_GIF
-        self.logger("Testing policy. Metadata: epsilon-{} k-{} LH-{} n_test-{} n_steps-{} H_mode-{}".format(
-                EPSILON, self.K, self.LOOKAHEAD, N_TEST, N_STEPS, self.H_mode), time=False)
-        self.logger(" |")
         # Reseting env and storing the initial observations
         observation = self.env.reset()
-        observation_h = observation
+        observation_h = observation.copy()
         #Making copy of the env to apply the heuristic
         self.env_h = self.env.copy()
         # Making checkpoints
@@ -648,8 +645,7 @@ class Experiment():
         H_RESULTS_C=[]
         pi_calls = 0
         calls = 0
-        # Measuring time of execution. 
-        start = time.time()
+        self.logger("Testing policy. Metadata: {}\n |".format(self.metadata_str), True, True, True)
         # First loop to execute an rollout experiment.
         for n_test in range(N_TEST):
             M_SEED = int(self.rg.random()*10**4)
@@ -734,19 +730,17 @@ class Experiment():
             # Reseting the environment
             observation = self.env.reset()
             obvservation_h = self.env_h.reset()
-        msg = " | Test done. Metadata: epsilon-{} k-{} LH-{} n_test-{} n_steps-{} H_mode-{}".format(
-                EPSILON, self.K, self.LOOKAHEAD, N_TEST, N_STEPS, self.H_mode)
-        self.logger(msg, time=False)
+        msg = " | Test done. Metadata: {}\n |".format(self.metadata_str)
+        self.logger(msg, True, False, True)
         self.logger("Percentage of successful calls to policy: %.2f"%(pi_calls/calls*100), time=False)
-        total_time = time.time() - start
-        self.logger("Total run time {}h: {}m: {}s".format(int(total_time//3600), int(total_time//60 - total_time//3600), int(total_time % 60)))
         # Saving to the class
         self.runs_rollout_results += RO_RESULTS
         self.runs_rollout_results_step += RO_RESULTS_C
         self.runs_heu_results += H_RESULTS
         self.runs_heu_results_step += H_RESULTS_C
         if GRAPH:
-            t_head = 'Test - %.2f pi success'%(pi_calls/calls)
+            t_head = 'Test Pi_Calls:%.2f'%(pi_calls/calls)
+            t_head+= " H:{} LH:{}".format(self.H_mode,self.LOOKAHEAD)
             self.make_graph(title_head=t_head, mod=self.mod)
         # Saving to generate the GIF
         if RUN_GIF: 
@@ -754,7 +748,159 @@ class Experiment():
             self.env.frames = []
             self.theres_test_gif = True
 
-    def make_graph(self, title_head='',mod='Cost',dpi=120):
+    def run_multiple_LH(self, LHS = [1], GRAPH=True):
+        """
+        Creates an initial state from reseting the environment and runs all the number of train
+        iterations and so on. This updates the policy with more states or with better actions.
+
+        Parameters
+        ----------
+        GIF : bool 
+            Variable to indicate if you desired to generate frames for the last 
+            train loop of the run, if the class was initialized with this behavior on this one
+            changes nothing. Default False.
+        GRAPH : bool
+            Draws and saves the graphs from the experiment. If there's not a graph generated and
+            one does not restarts the class 
+        """
+        l_LHS = len(LHS)
+        # Storing in 0 for the heuristic
+        H_env = self.env.copy()
+        observation = H_env.reset()
+        ENVS = [H_env]
+        OBS = [observation]
+        # Acumulate costs (LHS, N_TRAIN)
+        COSTS = np.zeros((l_LHS+1,self.N_TRAIN), dtype=np.float32)
+        # Per step costs (LHS, N_TRAIN, TOT_STEPS)
+        COSTS_STEP = np.zeros((l_LHS+1, self.N_TRAIN, self.env.moves_before_updating * self.N_STEPS), dtype=np.float32)
+        CHECKPOINTS = []
+        # Reseting env and storing the initial observations
+        for i in range(l_LHS):
+            ENVS.append(H_env.copy())
+            OBS.append(observation)
+        # making checkpoints
+        for i in range(l_LHS + 1):
+            CHECKPOINTS += [ENVS[i].make_checkpoint()]
+        # Measuring time of execution. 
+        self.logger("Run for LHs {} - Metadata: {}\n |".format(LHS, self.metadata_str), True, True, True)
+        # First loop to execute an rollout experiment.
+        for n_test in range(self.N_TRAIN):
+            # Sync the random generators
+            M_SEED = int(self.rg.random()*10**4)
+            for i in range(l_LHS + 1):
+                ENVS[i].rg = np.random.Generator(np.random.SFC64(M_SEED))
+            self.logger(" |-- Test : {} of {}".format(n_test+1, self.N_TRAIN))
+            # Making a checkpoint from the initial state generated.         
+            for i in range(l_LHS + 1):
+                ENVS[i].load_checkpoint(CHECKPOINTS[i])
+            # Setting up vars to store costs
+            # Making the progress bar
+            bar = tqdm.tqdm(range(self.env.moves_before_updating * self.N_STEPS), miniters=0)
+            for stp in bar:
+                actions = []
+                #Calls Heuristic and return best action
+                To_H = dict()
+                To_H['env'] = ENVS[0]
+                To_H['observation'] = OBS[0]
+                actions += [self.H(To_H)]
+                #Calls Rollout Strategy and returns action,qvalue
+                for i in range(1, l_LHS + 1):
+                    r_action, _ = Rollout_gpu(
+                        ENVS[i], 
+                        H=self.H_mode,
+                        alpha=self.alpha,
+                        epsilon=self.epsilon,
+                        K=self.K,
+                        lookahead=LHS[i-1],
+                        N_samples=self.N_SAMPLES,
+                        min_objective=self.min_obj,
+                        rg=self.rg)
+                    actions += [r_action]
+                #Update epsilon it goes from stochastic to deterministic 
+                self.epsilon = self.epsilon * self.epsilon_decay
+                #Helicopter take an action based on Rollout strategy and heuristic
+                for i in range(1 + l_LHS):
+                    OBS[i], cost, _, _ = ENVS[i].step(actions[i])
+                    COSTS[i,n_test] += cost #Acumulative cost for rollout per LH
+                    COSTS_STEP[i,n_test,stp] = COSTS[i,n_test] #List of cost over time
+                #Generate a message
+                msg =    " |   |      |"
+                msg += "\n |   |      |-- Agent step {}".format(stp)
+                msg += "\n |   |      |   '-- Actions: {} Costs : {}".format(actions, COSTS_STEP[:, n_test, stp])
+                bar.write(msg)
+                self.logger(msg, False, False)
+            bar.close()
+            msg =    " |   |"
+            msg += "\n |   |-- Test {} results".format(n_test+1)
+            msg += "\n |   |    '-- Actions: {} Costs : {}".format(actions, COSTS[:, n_test])
+            msg += "\n |"
+            self.logger(msg)
+        msg = " | Run for LHS {} done.".format(LHS)
+        msg+= "\nMetadata: {}\n |".format(self.metadata_str)
+        self.logger(msg, True, True, True)
+
+        if GRAPH:
+            # Making graph here
+
+            Experiment.check_dir("Runs")
+            time_s = Experiment.time_str()
+
+            sns.set(context="paper", style="whitegrid")
+            fig = plt.figure(figsize=(10,6),dpi=200)
+            y_ticks_rotation = 30
+            alpha_fill = 0.1
+            alpha_line = 0.5
+            alpha_p = 0.65
+            lw = 2
+            pw = 1
+            filled_markers = ('o', 'v', '^', '<', '>', '8', 's', 'p', '*', 'h', 'H', 'D', 'd', 'P', 'X')
+            colors = sns.color_palette("husl", 1 + l_LHS)
+            # First graph - Avg. Cost per step of all test
+            # Acumulative cost per step per test
+            x_1 = range(self.env.moves_before_updating * self.N_STEPS)
+            x_2 = range(1, self.N_TRAIN + 1)
+            for i in range(1 + l_LHS):
+                mean = np.mean(COSTS_STEP[i], axis=0)
+                std = np.std(COSTS_STEP[i],axis=0)
+                if i == 0:
+                    l = "H_mode {}".format(self.H_mode)
+                else:
+                    l = "Rollout LH {}".format(LHS[i-1])
+                c = clrs.hsv_to_rgb(colors[i])
+                m = filled_markers[i]
+                plt.plot(x_1, mean, label=l, alpha=alpha_line, color=c, lw=lw)
+                #plt.fill_between(x_1, mean-std, mean+std, alpha=alpha_fill, color=c)
+                plt.scatter(x_1, mean-std, alpha=alpha_p, color=c, lw=pw, marker=m)
+                plt.scatter(x_1, mean+std, alpha=alpha_p, color=c, lw=pw, marker=m)
+            plt.xlabel('Step')
+            plt.ylabel('Average '+ self.mod)
+            plt.yticks(rotation=y_ticks_rotation)
+            plt.title('Rollout Avg. {}/Step'.format(self.mod))
+            plt.legend()
+            plt.savefig(
+                "./Runs/Rollout avg cost-step LHS {} {} -- {}.png".format(LHS,self.metadata_str, time_s))
+            plt.clf() # cleaning figure
+
+            # Doing graph cost per test.
+            # Cost per test
+            for i in range(l_LHS + 1):
+                if i == 0:
+                    l = "H_mode {}".format(self.H_mode)
+                else:
+                    l = "Rollout LH {}".format(LHS[i-1])
+                plt.plot(x_2, COSTS[i], label=l, color=colors[i])
+            plt.xlabel('Test')
+            plt.ylabel(self.mod)
+            plt.yticks(rotation=y_ticks_rotation)
+            plt.title('Rollout {}/Test'.format(self.mod))
+            plt.legend()
+            plt.savefig(
+                "./Runs/Rollout cost-test LHS {} {} -- {}.png".format(LHS, self.metadata_str, time_s))
+            plt.clf()
+
+        return None
+
+    def make_graph(self, title_head='',mod='Cost',dpi=150):
         """
         Method to graph and save two graphs per expriment. An average cost 
         per step on all the test. And a progession of average cost of the per 
@@ -773,44 +919,69 @@ class Experiment():
         Experiment.check_dir("Runs")
         time_s = Experiment.time_str()
 
+        self.runs_rollout_archive += [self.runs_rollout_results_step]
+        self.runs_heu_archive += [self.runs_heu_results_step]
+
+        sns.set(context="paper", style="whitegrid")
+        fig = plt.figure(figsize=(10,6),dpi=dpi)
+        y_ticks_rotation = 30
+        r_color = sns.xkcd_rgb["medium green"]#"#08ABF2"
+        h_color = sns.xkcd_rgb["denim blue"]#"#FC1D3A"
+        alpha_fill = 0.08
+        alpha_line = 0.5
+        lw = 2
+        pw = 1
+        r_mark = 'o'
+        h_mark = '.'
+
         # First graph - Avg. Cost per step of all test
         # Acumulative cost per step per test
         R_RESULTS_STEPS = np.array(self.runs_rollout_results_step) 
         H_RESULTS_STEPS = np.array(self.runs_heu_results_step)
         x = range(R_RESULTS_STEPS.shape[1])
-        plt.plot(x, np.mean(R_RESULTS_STEPS, axis=0), label='Rollout')
-        plt.plot(x, np.mean(H_RESULTS_STEPS, axis=0), label='Heuristic')
+        mean_r = np.mean(R_RESULTS_STEPS, axis=0)
+        std_r = np.std(R_RESULTS_STEPS, axis=0)
+        plt.plot(x, mean_r, label='Rollout', alpha=alpha_line, color=r_color, lw=lw)
+        plt.fill_between(x, mean_r-std_r, mean_r+std_r, alpha=alpha_fill, color=r_color)
+        plt.scatter(x, mean_r-std_r, alpha=alpha_line, color=r_color, lw=pw, marker=r_mark)
+        plt.scatter(x, mean_r+std_r, alpha=alpha_line, color=r_color, lw=pw, marker=r_mark)
+        mean_h = np.mean(H_RESULTS_STEPS, axis=0)
+        std_h = np.std(H_RESULTS_STEPS, axis=0)
+        plt.plot(x, mean_h, label='Heuristic', alpha=alpha_line, color=h_color, lw=lw)
+        plt.fill_between(x, mean_h-std_h, mean_h+std_h, alpha=alpha_fill, color=h_color)
+        plt.scatter(x, mean_h-std_h, alpha=alpha_line, color=h_color, lw=pw, marker=h_mark)
+        plt.scatter(x, mean_h+std_h, alpha=alpha_line, color=h_color, lw=pw, marker=h_mark)
         plt.xlabel('Step')
         plt.ylabel('Average '+mod)
+        plt.yticks(rotation=y_ticks_rotation)
         if title_head != '':
-            plt.title('{} - Rollout results average {}/Step'.format(title_head,mod))
+            plt.title('{} - Rollout Avg. {}/Step'.format(title_head,mod))
         else:
-            plt.title('Rollout results average tests {}/Step'.format(mod))
+            plt.title('Rollout Avg. {}/Step'.format(mod))
         plt.legend()
         plt.savefig(
-            "./Runs/Rollout avg cost-step alpha-{} epsilon-{} epsilon_decay-{} k-{} LH-{} n_samples-{} H_mode-{} -- {}.png".format(
-                self.alpha, self.epsilon_op, self.epsilon_decay, self.K, self.LOOKAHEAD, self.N_SAMPLES, self.H_mode,
-                time_s))
+            "./Runs/Rollout avg cost-step {} -- {}.png".format(self.metadata_str, time_s))
         plt.clf() # cleaning figure
+
         # Doing graph cost per test.
         # Cost per test
         R_RESULTS_TEST = np.array(self.runs_rollout_results)
         H_RESULTS_TEST = np.array(self.runs_heu_results) 
         x = range(1, len(self.runs_rollout_results)+1)
-        plt.plot(x, R_RESULTS_TEST, label='Rollout')
-        plt.plot(x, H_RESULTS_TEST, label='Heuristic')
+        plt.plot(x, R_RESULTS_TEST, label='Rollout', color=r_color)
+        plt.plot(x, H_RESULTS_TEST, label='Heuristic', color=h_color)
         plt.xlabel('Test')
         plt.ylabel(mod)
+        plt.yticks(rotation=y_ticks_rotation)
         if title_head != '':
-            plt.title('{} - Rollout results {}/Test'.format(title_head,mod))
+            plt.title('{} - Rollout {}/Test'.format(title_head,mod))
         else:
-            plt.title('Rollout results {}/step'.format(mod))
+            plt.title('Rollout {}/step'.format(mod))
         plt.legend()
         plt.savefig(
-            "./Runs/Rollout cost-test alpha-{} epsilon-{} epsilon_decay-{} k-{} LH-{} n_samples-{} H_mode-{} -- {}.png".format(
-                self.alpha, self.epsilon_op, self.epsilon_decay, self.K, self.LOOKAHEAD, self.N_SAMPLES, self.H_mode,
-                time_s))
+            "./Runs/Rollout cost-test {} -- {}.png".format(self.metadata_str, time_s))
         plt.clf()
+
         # Clean the buffers
         self.runs_rollout_results = []
         self.runs_rollout_results_step = []
@@ -836,24 +1007,22 @@ class Experiment():
         Experiment.check_dir("Runs")
         time_s = Experiment.time_str()
         if RUN and (self.theres_run_gif):
-            self.logger("Creating gif for runs. This may take a while.")
-            imageio.mimsave("./Runs/Helicopter Rollout Run alpha-{} epsilon-{} epsilon_decay-{} k-{} LH-{} n_samples-{} H_mode-{} -- {}.gif".format(
-                self.alpha, self.epsilon_op, self.epsilon_decay, self.K, self.LOOKAHEAD, self.N_SAMPLES, self.H_mode, time_s), 
+            self.logger("Creating gif for runs. This may take a while.",time_delta=True)
+            imageio.mimsave("./Runs/Helicopter Rollout Run {} -- {}.gif".format(self.metadata_str, time_s), 
                 self.frames_run_r, fps=fps)
             self.frames_run_r = []
             imageio.mimsave("./Runs/Helicopter Heuristic Run -- H_mode {} -- {}.gif".format(self.H_mode, time_s),
                 self.frames_run_h, fps=fps)
             self.frames_run_h = []
             self.theres_run_gif = False
-            self.logger("Run gif. Done!\n")
+            self.logger("Run gif. Done!\n",time_delta=True)
         if TEST and self.theres_test_gif:
-            self.logger("Creating gif for tests. This may take a while.")
-            imageio.mimsave("./Runs/Helicopter Rollout Test alpha-{} epsilon-{} epsilon_decay-{} k-{} LH-{} n_samples-{} H_mode-{} -- {}.gif".format(
-                self.alpha, self.epsilon_op, self.epsilon_decay, self.K, self.LOOKAHEAD, self.N_SAMPLES, self.H_mode, time_s),
+            self.logger("Creating gif for tests. This may take a while.",time_delta=True)
+            imageio.mimsave("./Runs/Helicopter Rollout Test {} -- {}.gif".format(self.metadata_str, time_s),
                 self.frames_test_r, fps=fps)
             self.frames_test_r = []
             self.theres_test_gif = False
-            self.logger("Test gif. Done!\n")
+            self.logger("Test gif. Done!\n",time_delta=True)
         return None
 
     def save_policy(self, name_out=None):
@@ -869,9 +1038,7 @@ class Experiment():
         name = name_out
         if name is None:
             # Default name scheme
-            name = "Policy_Rollout Runs-{} alpha-{} epsilon-{} epsilon_decay-{} k-{} LH-{} n_samples-{} H_mode-{} -- {}".format(
-                self.c_runs ,self.alpha, self.epsilon_op, self.epsilon_decay, self.K, self.LOOKAHEAD, self.N_SAMPLES, self.H_mode, 
-                self.time_str())
+            name = "Policy_Rollout {} -- {}".format(self.metadata_str, self.time_str())
         file_h = open("./Policies/"+name+".pi",'wb')
         pickle.dump(self.PI,file_h)
         file_h.close()
@@ -922,7 +1089,7 @@ class Experiment():
             self.logger("Policy {} loaded.\n".format(name_in))
         print(self.PI)
 
-    def logger(self, msg, prnt=True, time=True):
+    def logger(self, msg, prnt=True, time=True, time_delta=False):
         """
         Just a method to save most of the print information in a file while the Experiment
         exists.
@@ -939,22 +1106,43 @@ class Experiment():
         if self.init_logger == False:
             self.check_dir("Logs")
             self.logfile = open("./Logs/rollout_log_{}.txt".format(self.time_str()),'wt')
+            if time_delta:
+                if self.last_time == 0:
+                    self.last_time = Time.time()
+                total_time = Time.time() - self.last_time
+                delta = " - delta-time {}h: {}m: {}s".format(int(total_time//3600), int(total_time//60 - total_time//3600*60), int(total_time % 60))
+                self.last_time = Time.time()
+                msg += delta
             if prnt:
-                print(msg,end='\n')
+                print(msg,end="\n")
             if time:
                 msg += " -- @ {}".format(self.time_str())
             self.logfile.write(msg+"\n")
             return True
         else:
+            if time_delta:
+                if self.last_time == 0:
+                    self.last_time = Time.time()
+                total_time = Time.time() - self.last_time
+                delta = " -- delta-time {}h: {}m: {}s".format(int(total_time//3600), int(total_time//60 - total_time//3600*60), int(total_time % 60))
+                self.last_time = Time.time()
+                msg += delta
             if prnt:
                 print(msg,end="\n")
             if time:
                 msg += " -- @ {}".format(self.time_str())
-            self.logfile.write(msg+"\n") 
-            
+            self.logfile.write(msg+"\n")
+
+    @property
+    def metadata_str(self):
+        msg = "LH-{} K-{} H_mode-{} N_SAMPLES-{}  ALPHA-{} EPSILON-{} E_DECAY-{}".format(
+            self.LOOKAHEAD, self.K, self.H_mode, self.N_SAMPLES, self.alpha, 
+            self.epsilon_op, self.epsilon_decay)
+        return msg
+
     @staticmethod
     def time_str():
-        return time.strftime("%d-%m-%Y-%H:%M:%S", time.gmtime())
+        return Time.strftime("%d-%m-%Y-%H:%M:%S", Time.gmtime())
 
     @staticmethod
     def check_dir(dir):
@@ -963,4 +1151,4 @@ class Experiment():
         if not dir in ls:
             print("Creating a folder {}".format(dir))
             os.mkdir(dir)
-        time.sleep(1)
+        Time.sleep(1)

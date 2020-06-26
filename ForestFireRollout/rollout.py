@@ -21,7 +21,6 @@ import os
 import tqdm
 import time as Time
 import matplotlib.pyplot as plt
-import matplotlib.colors as clrs
 import seaborn as sns
 import imageio
 import pickle
@@ -748,7 +747,7 @@ class Experiment():
             self.env.frames = []
             self.theres_test_gif = True
 
-    def run_multiple_LH(self, LHS = [1], GRAPH=True):
+    def run_multiple_LH(self, LHS = [1], GRAPH=True, dpi=200, save_arr=True):
         """
         Creates an initial state from reseting the environment and runs all the number of train
         iterations and so on. This updates the policy with more states or with better actions.
@@ -838,57 +837,80 @@ class Experiment():
         msg = " | Run for LHS {} done.".format(LHS)
         msg+= "\nMetadata: {}\n |".format(self.metadata_str)
         self.logger(msg, True, True, True)
+        time_s = Experiment.time_str()
 
         if GRAPH:
             # Making graph here
-
             Experiment.check_dir("Runs")
-            time_s = Experiment.time_str()
 
             sns.set(context="paper", style="whitegrid")
-            fig = plt.figure(figsize=(10,6),dpi=200)
+            n_cols = 2
+            n_rows = math.ceil(l_LHS / n_cols)
+            #fig = plt.figure(figsize=(3*n_cols,2*n_rows),dpi=dpi)
+            fig, axs = plt.subplots(n_rows,n_cols, 
+                    figsize=(4*n_cols,3*n_rows),dpi=dpi,sharex=True, sharey=True,
+                    gridspec_kw={'hspace': 0, 'wspace': 0})
+            fig.suptitle('Rollout Avg. {}/Step'.format(self.mod))
+
+            # ASTHETICS
             y_ticks_rotation = 30
-            alpha_fill = 0.1
-            alpha_line = 0.5
+            alpha_fill = 0.10
+            alpha_line = 0.8
             alpha_p = 0.65
             lw = 2
-            pw = 1
+            l_h = "H_mode {}".format(self.H_mode)
+            c_h = sns.xkcd_rgb['cobalt blue']
+            alpha_h = 0.9
+            alpha_fill_h = 0.09
+            mar_s_h = 0.8
             filled_markers = ('o', 'v', '^', '<', '>', '8', 's', 'p', '*', 'h', 'H', 'D', 'd', 'P', 'X')
-            colors = sns.color_palette("husl", 1 + l_LHS)
+            colors = sns.color_palette("husl", l_LHS + 1)
+            # END
+
             # First graph - Avg. Cost per step of all test
             # Acumulative cost per step per test
             x_1 = range(self.env.moves_before_updating * self.N_STEPS)
             x_2 = range(1, self.N_TRAIN + 1)
-            for i in range(1 + l_LHS):
+            mean_h = np.mean(COSTS_STEP[0], axis=0)
+            std_h = np.std(COSTS_STEP[0],axis=0)
+            
+            for i in range(1, l_LHS+1):
+                ax = axs[(i-1)//n_cols,(i-1)%n_cols]
                 mean = np.mean(COSTS_STEP[i], axis=0)
-                std = np.std(COSTS_STEP[i],axis=0)
-                if i == 0:
-                    l = "H_mode {}".format(self.H_mode)
-                else:
-                    l = "Rollout LH {}".format(LHS[i-1])
-                c = clrs.hsv_to_rgb(colors[i])
+                std = np.std(COSTS_STEP[i], axis=0)
+                l = "Rollout LH {}".format(LHS[i-1])
+                c = colors[i]
                 m = filled_markers[i]
-                plt.plot(x_1, mean, label=l, alpha=alpha_line, color=c, lw=lw)
-                #plt.fill_between(x_1, mean-std, mean+std, alpha=alpha_fill, color=c)
-                plt.scatter(x_1, mean-std, alpha=alpha_p, color=c, lw=pw, marker=m)
-                plt.scatter(x_1, mean+std, alpha=alpha_p, color=c, lw=pw, marker=m)
-            plt.xlabel('Step')
-            plt.ylabel('Average '+ self.mod)
-            plt.yticks(rotation=y_ticks_rotation)
-            plt.title('Rollout Avg. {}/Step'.format(self.mod))
-            plt.legend()
+                ax.plot(x_1, mean_h, label=l_h, alpha=alpha_h, color=c_h, lw=lw, ls='-.')
+                #ax.fill_between(x_1, mean_h-std_h, mean_h+std_h, alpha=alpha_fill_h, color=c_h)
+                ax.scatter(x_1, mean_h-std_h, s=mar_s_h, alpha=alpha_p, color=c_h, marker=filled_markers[0])
+                ax.scatter(x_1, mean_h+std_h, s=mar_s_h, alpha=alpha_p, color=c_h, marker=filled_markers[0])
+                ax.plot(x_1, mean, label=l, alpha=alpha_line, color=c, lw=lw)
+                ax.fill_between(x_1, mean-std, mean+std, alpha=alpha_fill, color=c)
+                #ax.scatter(x_1, mean-std, alpha=alpha_p, color=c, lw=pw, marker=m)
+                #ax.scatter(x_1, mean+std, alpha=alpha_p, color=c, lw=pw, marker=m)
+                ax.set(xlabel='Step', ylabel='Average '+ self.mod)
+                #ax.set_yticks(rotation=y_ticks_rotation)
+                ax.legend()
+            for ax in axs.flat:
+                ax.label_outer()
             plt.savefig(
                 "./Runs/Rollout avg cost-step LHS {} {} -- {}.png".format(LHS,self.metadata_str, time_s))
             plt.clf() # cleaning figure
 
             # Doing graph cost per test.
             # Cost per test
+            fig = plt.figure(figsize=(10,6),dpi=dpi)
             for i in range(l_LHS + 1):
                 if i == 0:
                     l = "H_mode {}".format(self.H_mode)
+                    ls_ = '-.'
+                    al = alpha_h
                 else:
                     l = "Rollout LH {}".format(LHS[i-1])
-                plt.plot(x_2, COSTS[i], label=l, color=colors[i])
+                    ls_ = '-'
+                    al = alpha_line
+                plt.plot(x_2, COSTS[i], label=l, color=colors[i], alpha=al, ls=ls_)
             plt.xlabel('Test')
             plt.ylabel(self.mod)
             plt.yticks(rotation=y_ticks_rotation)
@@ -898,9 +920,18 @@ class Experiment():
                 "./Runs/Rollout cost-test LHS {} {} -- {}.png".format(LHS, self.metadata_str, time_s))
             plt.clf()
 
+        if save_arr:
+            f1 = open("./Logs/rollout COSTS_STEP LHS {} -- {}.npy".format(LHS, time_s), 'wb')
+            np.save(f1, COSTS_STEP)
+            f2 = open("./Logs/rollout COSTS LHS {} -- {}.npy".format(LHS, time_s), 'wb')
+            np.save(f2, COSTS)
+            f1.close()
+            f2.close()
+            self.logger("Numpy Arrays save on ./Logs with time {}".format(time_s), time=False)
+
         return None
 
-    def make_graph(self, title_head='',mod='Cost',dpi=150):
+    def make_graph(self, title_head='',mod='Cost',dpi=200):
         """
         Method to graph and save two graphs per expriment. An average cost 
         per step on all the test. And a progession of average cost of the per 
@@ -925,14 +956,14 @@ class Experiment():
         sns.set(context="paper", style="whitegrid")
         fig = plt.figure(figsize=(10,6),dpi=dpi)
         y_ticks_rotation = 30
-        r_color = sns.xkcd_rgb["medium green"]#"#08ABF2"
-        h_color = sns.xkcd_rgb["denim blue"]#"#FC1D3A"
-        alpha_fill = 0.08
-        alpha_line = 0.5
+        r_color = sns.xkcd_rgb["medium green"]
+        h_color = sns.xkcd_rgb["denim blue"]
+        alpha_fill = 0.1
+        alpha_line = 0.6
+        alpha_h = 0.9
         lw = 2
         pw = 1
-        r_mark = 'o'
-        h_mark = '.'
+        h_mark = 'o'
 
         # First graph - Avg. Cost per step of all test
         # Acumulative cost per step per test
@@ -943,14 +974,14 @@ class Experiment():
         std_r = np.std(R_RESULTS_STEPS, axis=0)
         plt.plot(x, mean_r, label='Rollout', alpha=alpha_line, color=r_color, lw=lw)
         plt.fill_between(x, mean_r-std_r, mean_r+std_r, alpha=alpha_fill, color=r_color)
-        plt.scatter(x, mean_r-std_r, alpha=alpha_line, color=r_color, lw=pw, marker=r_mark)
-        plt.scatter(x, mean_r+std_r, alpha=alpha_line, color=r_color, lw=pw, marker=r_mark)
+        #plt.scatter(x, mean_r-std_r, alpha=alpha_line, color=r_color, lw=pw, marker=r_mark)
+        #plt.scatter(x, mean_r+std_r, alpha=alpha_line, color=r_color, lw=pw, marker=r_mark)
         mean_h = np.mean(H_RESULTS_STEPS, axis=0)
         std_h = np.std(H_RESULTS_STEPS, axis=0)
-        plt.plot(x, mean_h, label='Heuristic', alpha=alpha_line, color=h_color, lw=lw)
-        plt.fill_between(x, mean_h-std_h, mean_h+std_h, alpha=alpha_fill, color=h_color)
-        plt.scatter(x, mean_h-std_h, alpha=alpha_line, color=h_color, lw=pw, marker=h_mark)
-        plt.scatter(x, mean_h+std_h, alpha=alpha_line, color=h_color, lw=pw, marker=h_mark)
+        plt.plot(x, mean_h, label='Heuristic', alpha=alpha_h, color=h_color, lw=lw, ls='-.')
+        #plt.fill_between(x, mean_h-std_h, mean_h+std_h, alpha=alpha_fill, color=h_color)
+        plt.scatter(x, mean_h-std_h, alpha=alpha_h, color=h_color, s=pw, marker=h_mark)
+        plt.scatter(x, mean_h+std_h, alpha=alpha_h, color=h_color, s=pw, marker=h_mark)
         plt.xlabel('Step')
         plt.ylabel('Average '+mod)
         plt.yticks(rotation=y_ticks_rotation)
@@ -968,8 +999,8 @@ class Experiment():
         R_RESULTS_TEST = np.array(self.runs_rollout_results)
         H_RESULTS_TEST = np.array(self.runs_heu_results) 
         x = range(1, len(self.runs_rollout_results)+1)
-        plt.plot(x, R_RESULTS_TEST, label='Rollout', color=r_color)
-        plt.plot(x, H_RESULTS_TEST, label='Heuristic', color=h_color)
+        plt.plot(x, R_RESULTS_TEST, label='Rollout', color=r_color, alpha=alpha_line)
+        plt.plot(x, H_RESULTS_TEST, label='Heuristic', color=h_color, alpha=alpha_line, ls='-.')
         plt.xlabel('Test')
         plt.ylabel(mod)
         plt.yticks(rotation=y_ticks_rotation)

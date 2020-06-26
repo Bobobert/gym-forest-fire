@@ -13,6 +13,10 @@ WARNING!
 The heuristic can't be passed yet as an object, they need to be reprogramed in here 
 with the cuda.jit(device=True) decorator to compile and run in a thread.
 """
+# TODO 
+# add prunning to the sampler inside the n_sample bucle
+
+
 # Rob was here
 from numba import cuda
 import numba as nb
@@ -106,10 +110,14 @@ def Heuristic(local_grid, pos_row, pos_col, steps_to_update, parameters, probs, 
 
     elif h_mode == 12:
         return CONSERVATIVE(local_grid, pos_row, pos_col, steps_to_update, parameters, probs, costs, random_states, worker, 2)
+    elif h_mode == 13:
+        return CONSERVATIVE(local_grid, pos_row, pos_col, steps_to_update, parameters, probs, costs, random_states, worker, 3)
     elif h_mode == 21:
         return PREVENTIVE(local_grid, pos_row, pos_col, steps_to_update, parameters, probs, costs, random_states, worker, 1)
     elif h_mode == 22:
         return PREVENTIVE(local_grid, pos_row, pos_col, steps_to_update, parameters, probs, costs, random_states, worker, 2)
+    elif h_mode == 23:
+        return PREVENTIVE(local_grid, pos_row, pos_col, steps_to_update, parameters, probs, costs, random_states, worker, 3)
 
 @cuda.jit(device=True)
 def CONSERVATIVE(local_grid, pos_row, pos_col, steps_to_update, parameters, probs, costs, random_states, worker, VISION):

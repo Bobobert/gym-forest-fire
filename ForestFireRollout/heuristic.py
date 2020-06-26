@@ -7,7 +7,7 @@ Modified on jun 2020 v2.0
     for each zone a coefficient based on fire cells(+1), tree cells(+ p_fire)
     and empty cells (+ p_tree) and divided by grid total cells.
     Now args contain a 'mode', 1 for fire cells heuristic and 2  for coefficient heuristic.
-Modifief on jun 2020 v2.1
+Modifief on jun 2020 v2.2
     @by: bobobert
     Added functions to pass the arguments to Heuristic given the addaptation to GPU, experiment
     does not longer pass additional args. Also programmed the functions on the rollout_sampler_gpu
@@ -37,6 +37,16 @@ def Heuristic_m1_v2(args):
     args['mode'] = 1
     return Heuristic(args)
 
+def Heuristic_m1_v3(args):
+    """
+    Conservative heuristic with vision = 3
+
+    H_mode = 13
+    """
+    args['vision'] = 3
+    args['mode'] = 1
+    return Heuristic(args)
+
 def Heuristic_m2_v1(args):
     """
     Preventive heuristic with vision = 1
@@ -54,6 +64,16 @@ def Heuristic_m2_v2(args):
     H_mode = 22
     """
     args['vision'] = 2
+    args['mode'] = 2
+    return Heuristic(args)
+
+def Heuristic_m2_v3(args):
+    """
+    Preventive heuristic with vision = 3
+
+    H_mode = 23
+    """
+    args['vision'] = 3
     args['mode'] = 2
     return Heuristic(args)
 

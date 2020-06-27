@@ -245,7 +245,7 @@ def Rollout_gpu(
     """
     # epsilon-greedy in action. 
     # Putting this in here comes handy to calculate the expected cost of the epsilon action
-    # instead of sampling all the other possible trayectories. While using parallel is assigned.
+    # instead of sampling all the other possible trajectories. While using parallel is assigned.
     explotation = True
     if epsilon > rg.random(dtype=np.float32):
         # Epsilon-greedy behaviour

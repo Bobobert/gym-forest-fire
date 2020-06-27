@@ -7,7 +7,7 @@ v 0.3
 
 All new rollout sampler function using the cuda compiler from the libraty Numba.
 In here you will find the necessary to generate to pass an actual state of an
-Helicopter environment to create the trayectories to sample, the kernel to run them
+Helicopter environment to create the trajectories to sample, the kernel to run them
 and the function to pass the objective function back.
 WARNING!
 The heuristic can't be passed yet as an object, they need to be reprogramed in here 
@@ -405,7 +405,7 @@ def get_leafs(action_set,
               depth, 
               n_samples):
     """
-    Function that generates a list for the kernel to asign samples trayectories to the
+    Function that generates a list for the kernel to asign samples trajectories to the
     device. It returns in a numpy array all the leafs of the tree with the lookahead depht
     required.
 
@@ -418,27 +418,27 @@ def get_leafs(action_set,
     n_samples: int
         Number of samples required per leaf of the three.
     """
-    leafs = [trayectory for trayectory in itertools.product(action_set,repeat=depth)]
+    leafs = [trajectory for trajectory in itertools.product(action_set,repeat=depth)]
     return np.array(leafs, dtype=np.int8)
     # Deprecated.
     """if n_samples >= 1:
-        leafs = [trayectories for trayectories in itertools.repeat(leafs, n_samples)]
+        leafs = [trajectories for trajectories in itertools.repeat(leafs, n_samples)]
         leafs = np.array(leafs, dtype=NPTINT)
         return leafs.reshape(leafs.shape[0]*leafs.shape[1], leafs.shape[2])
     else:
         raise Exception("n_samples need to be equal or greater than 1. {} was given.".format(n_samples))"""
 
 @cuda.jit
-def sample_trayectories(grid, 
+def sample_trajectories(grid, 
                         probs, 
                         parameters, 
                         costs, 
-                        trayectories, 
+                        trajectories, 
                         random_states, 
                         results):
     """
-    New function to sample all the trayectories individually from all the posible
-    trayctories and the samples; for each there's a repeated trayectory. This is made this way
+    New function to sample all the trajectories individually from all the posible
+    trayctories and the samples; for each there's a repeated trajectory. This is made this way
     to use the most of the device resources most of the time to accelerate the process.
     Very ad-hoc for the forest fire environment
     """
@@ -451,7 +451,7 @@ def sample_trayectories(grid,
     # Starting linear addressing of the samples
     worker = cuda.grid(1)
 
-    if worker < trayectories.shape[0]:
+    if worker < trajectories.shape[0]:
         # A local copy of the grid
         local_grid = cuda.local.array(GRID_SIZE, dtype=nb.int8)
         # Updated works to generate a copy from here to better behavior
@@ -460,7 +460,7 @@ def sample_trayectories(grid,
             for j in range(GRID_SIZE[1]):
                 local_grid[i,j] = env_initial_state[i,j]
                 updated_grid[i,j] = EMPTY
-        # Doing a sample given a trayectory
+        # Doing a sample given a trajectory
         # Initial conditions
         pos_row, pos_col = parameters[0], parameters[1]
         steps_to_update = parameters[2]
@@ -468,7 +468,7 @@ def sample_trayectories(grid,
         alpha = ALPHA
         sample_cost = 0.0
         # Begin the sample
-        for action in trayectories[worker]:
+        for action in trajectories[worker]:
             updated_grid, pos_row, pos_col, steps_to_update, cost = \
                 helicopter_step(local_grid, updated_grid, \
                                 pos_row, pos_col, steps_to_update, action, \
@@ -479,7 +479,7 @@ def sample_trayectories(grid,
             for i in range(GRID_SIZE[0]):
                 for j in range(GRID_SIZE[1]):
                     local_grid[i,j] = updated_grid[i,j]
-        # End of trayectory
+        # End of trajectory
         # Begining to use the heuristic
         k = parameters[4]
         for _ in range(k):
@@ -511,7 +511,7 @@ def helicopter_step(grid,
     """
     Function on to execute on device per thread to update
     and give a step of the agent in its environment. This is meant
-    to run inside the sample_trayectories kernel.
+    to run inside the sample_trajectories kernel.
     """
 
     new_steps_before_updating = 0
@@ -590,8 +590,8 @@ def helicopter_step(grid,
 
     # Start to check the hits
     hits = 0.
-    if grid[new_pos_row, new_pos_col] == FIRE:
-        grid[new_pos_row, new_pos_col] = EMPTY
+    if updated_grid[new_pos_row, new_pos_col] == FIRE:
+        updated_grid[new_pos_row, new_pos_col] = EMPTY
         hits += 1.0
     # End of hits
 
@@ -599,11 +599,11 @@ def helicopter_step(grid,
     fires, empties, trees = 0.0 ,0.0 ,0.0
     for i in range(GRID_SIZE[0]):
         for j in range(GRID_SIZE[1]):
-            if grid[i,j] == FIRE:
+            if updated_grid[i,j] == FIRE:
                 fires += 1.
-            elif grid[i,j] == TREE:
+            elif updated_grid[i,j] == TREE:
                 trees += 1. 
-            elif grid[i,j] == EMPTY:
+            elif updated_grid[i,j] == EMPTY:
                 empties += 1.
     # End of counting
 
@@ -621,18 +621,18 @@ def helicopter_step(grid,
     return updated_grid, new_pos_row, new_pos_col, new_steps_before_updating, cost
 
 @nb.jit
-def min_max(trayectories, results, n_samples, action_set, min_obj):
+def min_max(trajectories, results, n_samples, action_set, min_obj):
     """
-    A custon function to calculate the means of the trayectories
-    given only the first action of the trayectory. Then calculates
+    A custon function to calculate the means of the trajectories
+    given only the first action of the trajectory. Then calculates
     the minimum.
     """
     l_as = len(action_set)
     sample_avg = np.zeros(l_as, dtype=NPTFLOAT)
     sample_c = np.ones(l_as, dtype=np.uint32)
     for k in range(n_samples):
-        # Calculating the averages for the first action in the trayectory
-        for t, c in zip(trayectories, results[k]):
+        # Calculating the averages for the first action in the trajectory
+        for t, c in zip(trajectories, results[k]):
             fa = t[0] # Getting the first action
             for i in range(l_as):
                 if fa == action_set[i]:
@@ -694,12 +694,12 @@ def sampler(env,
         in a manner that the farther costs can have a less impact on the sample
         cost overall.
     n_samples: int
-        Quantity of samples to execute per trayectory on the tree.
+        Quantity of samples to execute per trajectory on the tree.
     k: int
         Steps to execute with the heuristic given. It can be zero if no heuristic
         is required
     lookahead: int
-        The depth of the trayectory tree.
+        The depth of the trajectory tree.
     min_obj: bool
         If the objective is to minimize set to true, otherwise False.
     action_set: list
@@ -727,14 +727,14 @@ def sampler(env,
     if not action_set is None:
         SAMPLER_CONST['ACTION_SET'] = action_set
         SAMPLER_CONST['L_AS'] =  len(action_set)
-    # Generating the trayectories from the tree leafs
-    trayectories = get_leafs(ACTION_SET, LOOKAHEAD, 1)
+    # Generating the trajectories from the tree leafs
+    trajectories = get_leafs(ACTION_SET, LOOKAHEAD, 1)
     # Copying to device
-    d_trayectories = cuda.to_device(trayectories)
-    d_results = cuda.device_array(trayectories.shape[0],dtype=NPTFLOAT)
+    d_trajectories = cuda.to_device(trajectories)
+    d_results = cuda.device_array(trajectories.shape[0],dtype=NPTFLOAT)
     # Calculating kernel size
     threadspread = THREADSPREAD # Pascal has SM with 64 or 128 units
-    blockspread = math.ceil(trayectories.shape[0] / threadspread)
+    blockspread = math.ceil(trajectories.shape[0] / threadspread)
     # Setting Random generators
     random_states = rdm_states_gen(threadspread*blockspread, seed=seed)
     #Loading the actual state of the environment to the device
@@ -754,16 +754,16 @@ def sampler(env,
         h_mode=h_mode,
         k=k
     )
-    # Starting the kernel on the device to sample the trayectories
+    # Starting the kernel on the device to sample the trajectories
     results = []
     for _ in range(n_samples):
-        sample_trayectories[blockspread, threadspread](d_grid, \
-            d_probs, d_params, d_costs, d_trayectories, random_states, d_results)
-        # Retriving to host the samples results                        (grid, probs, parameters, costs, trayectories, random_states, results)
+        sample_trajectories[blockspread, threadspread](d_grid, \
+            d_probs, d_params, d_costs, d_trajectories, random_states, d_results)
+        # Retriving to host the samples results                        (grid, probs, parameters, costs, trajectories, random_states, results)
         results.append(d_results.copy_to_host())
     # Applying objective
     results = np.array(results)
-    best_action, best_cost, avg_costs_action = min_max(trayectories, results, N_SAMPLES, ACTION_SET, min_obj)
+    best_action, best_cost, avg_costs_action = min_max(trajectories, results, N_SAMPLES, ACTION_SET, min_obj)
 
     # Returning to original values to action set only.
     if not action_set is None:

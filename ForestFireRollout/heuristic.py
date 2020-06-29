@@ -1,19 +1,81 @@
 # -*- coding: utf-8 -*-
 """
 Set of Heuristics 2.0
-
 Created on jun 2020 v1.0
-
 Modified on jun 2020 v2.0
     Added Calculate_Fire_Coefficient: An Heuristic that calculates
     for each zone a coefficient based on fire cells(+1), tree cells(+ p_fire)
     and empty cells (+ p_tree) and divided by grid total cells.
     Now args contain a 'mode', 1 for fire cells heuristic and 2  for coefficient heuristic.
-
+Modifief on jun 2020 v2.2
+    @by: bobobert
+    Added functions to pass the arguments to Heuristic given the addaptation to GPU, experiment
+    does not longer pass additional args. Also programmed the functions on the rollout_sampler_gpu
+    commented their H_mode keys on the arguments.
 @author: MauMontenegro
 """
 import numpy as np
 import random
+
+def Heuristic_m1_v1(args):
+    """
+    Conservative heuristic with vision = 1
+
+    H_mode = 11
+    """
+    args['vision'] = 1
+    args['mode'] = 1
+    return Heuristic(args)
+
+def Heuristic_m1_v2(args):
+    """
+    Conservative heuristic with vision = 2
+
+    H_mode = 12
+    """
+    args['vision'] = 2
+    args['mode'] = 1
+    return Heuristic(args)
+
+def Heuristic_m1_v3(args):
+    """
+    Conservative heuristic with vision = 3
+
+    H_mode = 13
+    """
+    args['vision'] = 3
+    args['mode'] = 1
+    return Heuristic(args)
+
+def Heuristic_m2_v1(args):
+    """
+    Preventive heuristic with vision = 1
+
+    H_mode = 21
+    """
+    args['vision'] = 1
+    args['mode'] = 2
+    return Heuristic(args)
+
+def Heuristic_m2_v2(args):
+    """
+    Preventive heuristic with vision = 2
+
+    H_mode = 22
+    """
+    args['vision'] = 2
+    args['mode'] = 2
+    return Heuristic(args)
+
+def Heuristic_m2_v3(args):
+    """
+    Preventive heuristic with vision = 3
+
+    H_mode = 23
+    """
+    args['vision'] = 3
+    args['mode'] = 2
+    return Heuristic(args)
 
 def Heuristic(args):
     """
@@ -27,7 +89,6 @@ def Heuristic(args):
     >>>     'observation': Forest_fire.step(action),
     >>>     'vision':1,
     >>>     })
-
     args - dict
     -----------
     'env' : expecting helicopter environment object.
@@ -189,19 +250,22 @@ def Calculate_Fire_Coefficient(env,zone):
     for row in range(zone.shape[0]):
         for col in range(zone.shape[1]):
             if zone[row][col]==env.fire:
-                coefficient+=1
+                coefficient+=2.0
             if zone[row][col]==env.tree:
-                coefficient+=env.p_fire
+                coefficient+=0.5
             if zone[row][col]==env.empty:
-                coefficient-=env.p_tree
-    coefficient=coefficient/(zone.shape[0]*zone.shape[1])    
+                coefficient-=0.5
+    try:#RWH
+        coefficient=coefficient/(zone.shape[0]*zone.shape[1])
+    except:
+        coefficient=0
     return coefficient
 
 #Get neighborhood of agent according to vision range
 def get_neighborhood(grid,pos,vision):
     pos_row=pos[0]
     pos_col=pos[1]    
-    neighborhood=grid[pos_row:pos_row+1+vision*2,pos_col:pos_col+1+vision*2]
+    neighborhood=grid[pos_row - vision:pos_row+1+vision,pos_col - vision:pos_col+1+vision] #RWH
     return neighborhood
 
 def ExpandGrid(grid,vision):        
@@ -209,26 +273,16 @@ def ExpandGrid(grid,vision):
         PadGrid = np.zeros((size[0],size[1]), dtype=np.int16)        
         for i in range(size[0]):
             for j in range(size[1]):
-                if(grid[i][j][0]==1):
+                if(grid[i][j][0]==1): # Tree
                     PadGrid[i][j]=0
-                elif(grid[i][j][1]==1):
+                elif(grid[i][j][1]==1): # Empty
                     PadGrid[i][j]=1
                 else:
-                    PadGrid[i][j]=2
+                    PadGrid[i][j]=2 # Fire?
         size=PadGrid.shape
-        PadGrid2 = np.zeros((size[0]+2*vision,size[1]+2*vision), dtype=np.int16)
+        PadGrid2 = np.zeros((size[0]+2*vision,size[1]+2*vision), dtype=np.int8)
         PadGrid2[vision:-vision,vision:-vision] = PadGrid
         return PadGrid2
-
-def DUMB_ONE(args):
-    assert isinstance(args, dict), "This function requieres a dict of kwards to perform. Please provide one."
-    expected_args = ['env']
-    for arg in expected_args:
-        if args.get(arg) is None:
-            raise "At least the argument {} is missing! Please do pass correct arguments".format(arg)
-    env = args['env']
-    actions = env.action_set
-    return actions[0]
 
 def potential_one(args):
     assert isinstance(args, dict), "This function requieres a dict of kwards to perform. Please provide one."
@@ -240,3 +294,7 @@ def potential_one(args):
     grid, pos, remain_steps = args['observation']
 
     return None
+
+def dummy(args):
+    #H_mode = 0
+    return 3

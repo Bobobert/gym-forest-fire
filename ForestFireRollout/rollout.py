@@ -2,7 +2,11 @@
 """
 Created on jun 2020
 
+v0.2
+
 @author: bobobert, MauMontenegro
+
+Version for GPU CUDA Capable ONLY
 """
 
 # Rob was here, so did Mau
@@ -11,20 +15,19 @@ Created on jun 2020
 import numpy as np
 import math
 
-# Parallel exec
-from multiprocessing import Pool
 import os
 
 #Misc for looks and graphs.
 import tqdm
-import time
+import time as Time
 import matplotlib.pyplot as plt
+import seaborn as sns
 import imageio
 import pickle
 import re
 
-#Importing the sampler
-from rollout_sampler import sample_trayectory, R_ITER
+from rollout_sampler_gpu import sampler
+
 
 class Policy(object):
     """
@@ -32,7 +35,6 @@ class Policy(object):
     type to store the controls and its values for the states as the keys. A string system
     to represent states is recomended for ease to use with the hash table. This is usually
     referred as a tabular policy.
-
     Parameters
     ----------
     behavior : 'stochastic'(default), 'deterministic', 'max', 'min'. This is a variable to save the 
@@ -43,15 +45,12 @@ class Policy(object):
         is set accodingly. Default is True.
     DEBUG : Boolean. If you want to be printing the messages of the management of the policy
         or not.
-
     Methods
     -------
     Policy.new()
         Method to store for state key the control and value given. 
-
         Returns
         None
-
     Parameters
     ----------
     key : The state codification.
@@ -62,14 +61,11 @@ class Policy(object):
     value : float
         Value associated with the control in that state. if the control has been already
         seen the value is averaged.
-
     Policy.call()
         Method to call a control from a given state key. Its behavior is by default the one given 
         when the object was created.
-
         Returns
         control type or False if key does not exists on the policy.
-
     Parameters
     ----------
     key : The state codification
@@ -187,21 +183,24 @@ class Policy(object):
             # Key not in policy!
             return False
 
-def Rollout(
+def Rollout_gpu(
     env, 
-    H, 
+    H=0, 
     alpha=1, 
     epsilon=0, 
     K=-1,
     lookahead = 1, 
     N_samples=10, 
-    n_workers=-1,
-    H_args=None,
     min_objective=True,
     rg = None
     ):
     """Funtion to do a rollout from the actions available and the use of the Heuristic H.
-    The argument k is to truncate how many steps the heuristic is going to execute.
+    The argument k is to truncate how many steps the heuristic is going to execute. This
+    version is edited to run with the sampler of the rollout_sample_gpu which needs other 
+    considerations in this version. 
+    It does not longer support to pass an function or object
+    as the Heuristic. One needs to program it on the file under the Heuristic function and
+    add a mode-key, which is the one is pass here.
     
     This function is wrote in base in the rollout algorithm as presented in the book of
     Dimitry Bertsekas Reinforcement Learning and Optimal Control.
@@ -220,176 +219,48 @@ def Rollout(
         - copy()
         - make_checkpoint()
         - load_checkpoint()
-    H : Object or function that references the heurist to execute. These type of functions
-        requiere to support their inputs as a dict with at least the 'observation', and 'env'
-        keys on it.
-    H_args : Optional Dict of arguments to pass to the heuristic.
-    alpha : Discount factor for the cost function.
-    epsilon : It must be a quantity of probability in the range 0<epsilon<=1 to take an exploration
+    H : int
+        From the rollout_sampler_gpu.Heuristic() select a mode that has been
+        programed inside that function to work in the device.
+    alpha : float
+        Discount factor for the cost function.
+    epsilon : float 
+        It must be a quantity of probability in the range 0<epsilon<=1 to take an exploration
         action. This makes up the behaviour in a epsilon-greedy technique. In this case greedy 
         been the heuristic H.
-    K : Integer of number of steps to keep executing the heuristic.
+    K : int
+        Integer of number of steps to keep executing the heuristic.
     lookahead : int
         Numbert of steps that the rollout algorithm can take in greedy form, forming a series of controls,
         that minimizes of maximizes the cost function. This increases the cost of the computation, and 
         discards all the controls but except the first.
-    N_samples : Number of samples required to calculate the expected value of the
+    N_samples : int
+        Number of samples required to calculate the expected value of the
         cost function.
-    n_workers : Quantity of threads that the function can use to sample the environment.
-        If set to 1, a sequential execution will be done.
-    min_objective : Bool variable to define if the objective is to maximize of minimize the cost function.
+    min_objective : bool 
+        Variable to define if the objective is to maximize of minimize the cost function.
         This is problem-model dependant.
     rg : numpy.random.Generator type
         This function now needs an external random generator from the numpy library.
     """
-    # Executive variables
-    prune_samples = int(math.ceil(0.2*N_samples)) #20% of total samples goes to obtain controls and discard the worst
-    NTOP=4 #Top 4 controls that are used in rest of samples
-    cpus = n_workers
-    parallel = False
-    if cpus == 1:
-        parallel = False
-    elif cpus > 1:
-        parallel = True
-        if lookahead == 1:
-            cpus = len(env.action_set) 
-    else:
-        raise "Something went wrong! {} is an invalid workers number!".format(cpus)
-    
-    objective = 1
-    if not min_objective:
-        # The default program is wrote to minimize.
-        objective = -1
     # epsilon-greedy in action. 
     # Putting this in here comes handy to calculate the expected cost of the epsilon action
-    # instead of sampling all the other possible trayectories. While using parallel is assigned.
+    # instead of sampling all the other possible trajectories. While using parallel is assigned.
     explotation = True
     if epsilon > rg.random(dtype=np.float32):
         # Epsilon-greedy behaviour
         # Turning to exploration
         explotation = False
     if explotation: #Explotation step. Sampling all the expected values to chose greedy accordingly to rollout algorithm. 
-        # Creation of an iterable with the action set to make the samples
-        # R_ITER could explode in resources comsumption if the lookahead is greater than 1
-        # As it does a tree with Acion_set^lookahead branches to sample. 
-
-
-        #Make an Iterable with some samples(prune_samples) to discard controls that are not promising.
-        to_evaluate = R_ITER(env, H, cpus, alpha, K, lookahead, prune_samples, H_args=H_args,
-                        Min_obj=min_objective)
-               
-        if parallel:
-            # Execute the sampling in multiple threads of the cpu with map function
-            # Usually this perfoms better than single thread for long trayectories/number of samples
-            # If the trayectories are short, of the number of samples is little, a sequential run could perform better
-            costs = [] 
-            chunk_trayectory= []
-            new_trayectories= []
-            #Sample few times all trajectories
-            p = Pool(processes=cpus)                      
-            costs = p.imap_unordered(sample_trayectory,to_evaluate)                     
-            p.close()
-            p.join()            
-            #Get only the best NTOP controls after some iterations based on the average cost
-            best_controls = sorted(costs, key = lambda x: x[1], reverse = False)[:NTOP]           
-            best_controls = [x[0] for x in best_controls]          
-            #Create new chunk size according to new controls
-            new_chunk= math.ceil(9*len(best_controls) / cpus)          
-            #Copy only trayectories that belong to selected controls and create
-            #the pooling structure according to cpus.            
-            i=0 
-            for element in to_evaluate.all_trayectories:
-                for branch in element:
-                    for ctrl in best_controls:                    
-                        if ctrl == branch[0]:
-                            if i < new_chunk:
-                                chunk_trayectory+= [branch]   
-                                i+=1   
-                            if i==new_chunk:
-                                new_trayectories+=[chunk_trayectory]  
-                                chunk_trayectory=[]
-                                i=0
-            new_trayectories+=[chunk_trayectory]  
-            if lookahead==1:
-                new_trayectories=to_evaluate.all_trayectories             
-            #Setting new values to iterable(Creating a new one will consume much time)
-            to_evaluate.all_trayectories=new_trayectories 
-            to_evaluate.j=0
-            to_evaluate.N_samples=N_samples- prune_samples    
-            costs = [] 
-            p = Pool(processes=cpus)                      
-            costs = p.imap_unordered(sample_trayectory,to_evaluate)
-        else:
-            # Execute an evaluation at a time in one cpu thread
-            chunk_trayectory= []
-            new_trayectories= []
-            costs = []
-            for i in to_evaluate:
-                costs.append(sample_trayectory(i))          
-            #Get only the best NTOP controls after some iterations based on the average cost
-            best_controls = sorted(costs, key = lambda x: x[1], reverse = False)[:NTOP] 
-            best_controls = [x[0] for x in best_controls]  
-            #Create new chunk size according to new controls
-            new_chunk= math.ceil(9*len(best_controls) / cpus)          
-            #Copy only trayectories that belong to selected controls
-            i=0 
-            for element in to_evaluate.all_trayectories:
-                for branch in element:
-                    if branch[0] in best_controls:
-                        if i < new_chunk:
-                            chunk_trayectory+= [branch]   
-                            i+=1   
-                        if i==new_chunk:
-                            new_trayectories+=[chunk_trayectory]  
-                            chunk_trayectory=[]
-                            i=0
-            new_trayectories+=[chunk_trayectory]           
-            #Setting new values to iterable(Creating a new one will consume much time)
-            to_evaluate.all_trayectories=new_trayectories 
-            to_evaluate.j=0
-            to_evaluate.N_samples=N_samples- prune_samples  
-            #Get Costs for bests controls
-            costs = []
-            for i in to_evaluate:
-                costs.append(sample_trayectory(i))            
-        # costs is the list of the costs of the sampled trayectories from their respective action
-        # As the greedy nature of the algorithm, the sample trayectory do only returns the first control
-        # and the expected cost. Here we take that minimum not caring of the rest of the trayectory may have
-        # been.               
-        min_cost, r_action = objective*np.inf, None             
-        for action, cost in costs:                                
-            if objective*cost < objective*min_cost:
-                r_action = action # Saving the action with less cost
-                min_cost = cost         
-        if parallel: # Terminating the pool of processes in this rollout
-            p.close()
-            p.join()
-        del to_evaluate # Cleaning the iterable 
-        return r_action, min_cost
-        
+        best_action, best_cost, _ = sampler(env, h_mode=H, alpha=alpha, n_samples=N_samples, k=K,
+                                    lookahead=lookahead, min_obj=min_objective, seed=int(rg.random()*10**2))
     else: # Option to take an exploration step
         actions = list(env.action_set)
-        e_action = rg.choice(actions) # Chose a random action.
-        e_actions = [e_action for _ in range(N_samples)]
-        # Trying to use an efective way to sample the trayectory cost
-        # It creates a worker to do a simple sample of the trayectory, instead 
-        # of doing all the samples in a simple worker.
-        to_evaluate = R_ITER(env, H, cpus, alpha, K, 1, 1, H_args=H_args, Action_set=e_actions,
-                        Min_obj=min_objective)
-        if parallel:
-            p = Pool(processes=cpus)
-            costs = p.imap_unordered(sample_trayectory, to_evaluate)
-            p.close()
-            p.join()
-        else:
-            costs = []
-            for i in to_evaluate:
-                costs.append(sample_trayectory(i))
-        e_cost = 0
-        for _, cost in costs:
-            e_cost += cost / N_samples
-        del to_evaluate
-        return e_action, e_cost
+        e_action = rg.choice(actions) # Chose a random action and sample its cost with a lookahead 1.
+        best_action, best_cost, _ = sampler(env, h_mode=H, alpha=alpha, n_samples=N_samples, k=K,
+                                    lookahead=1, action_set=[e_action], min_obj=min_objective, 
+                                    seed=int(rg.random()*10**2))
+    return best_action, best_cost
 
 class Experiment():
     """
@@ -397,6 +268,8 @@ class Experiment():
     animations, save results in pickle form. 
     As this is a RL-Rollout implementation it needs a base heuristic or base policy to 
     call and to compare to start improving the min/max of the cost function.
+
+    -- This is the GPU only version. It does not support Heuristic as function or object --
     
     Parameters
     ----------
@@ -417,9 +290,12 @@ class Experiment():
         Object or function that references the heurist to execute. These type of functions
         requiere to support their inputs as a dict with at least the 'observation', and 'env'
         keys on it. It must return an action type.
-
-    H_ARGS : *Dict type 
-        Optional Dict of additional arguments to pass to the heuristic.
+    
+    H_mode : int
+        Inside the rollout_sampler_gpu.Heuristic there is a set of heuristics to address
+        passing this argument. For a heuristic to work in this version, it needs to be writen
+        inside the function to compile to device. For the results to be accurate they need to
+        output the same values per state.
 
     PI : Policy object
         Here one can pass an policy already started. If None it generates a new one.
@@ -429,10 +305,7 @@ class Experiment():
         an unique policy with rollout.
         The result of this is the average of the costs between all the tests for each run.
         Notice that inside a run every test starts with the same initial state.
-        Each test has execute all the follwing variables. Then for a sequential
-        run the complexity of the execution roughly speaking is above of (N_TEST * N_STEPS * N_SAMPLES * K).
-        To lower the time of execution increase the number or workers as posible as it parallelize the
-        N_SAMPLES // N_WORKERS. 
+        Each test has execute all the follwing variables. 
 
     N_STEPS : int 
         Number of steps that the environment takes. Speaking about the Helicopter environment, the variable
@@ -467,10 +340,6 @@ class Experiment():
         Variable to define if the objective is to maximize of minimize the cost function.
         This is problem-model dependant.
 
-    N_WORKERS : int 
-        Quantity of threads that the function can use to sample the environment.
-        If set to 1, a sequential execution will be done on a single thread.
-
     RUN_GIF : bool
         Variable to control the behavior if the last execution of run generates frame for each
         agent step for being able to generate a .gif with the .gif method.
@@ -496,7 +365,7 @@ class Experiment():
         self,
         ENV,
         H,
-        H_ARGS = None,
+        H_mode=0,
         PI = None,
         N_TRAIN = 10,
         N_STEPS = 25,
@@ -507,7 +376,6 @@ class Experiment():
         EPSILON = 0,
         EPSILON_DECAY = 0.99,
         MIN_OBJECTIVE = True,
-        N_WORKERS = -1,
         RUN_GIF = False,
         ):
         def check_ints(suspect):
@@ -522,10 +390,7 @@ class Experiment():
         self.env = ENV
         self.env_h = None # Var to env copy for applying the heuristic
         self.H = H
-        if H_ARGS is None:
-            self.H_args = dict()
-        else:
-            self.H_args = H_ARGS
+        self.H_mode = H_mode
         self.min_obj = MIN_OBJECTIVE
         assert isinstance(MIN_OBJECTIVE, bool), "With a True/False indicate if minimize is the objective. Invalid type {} passed".format(type(MIN_OBJECTIVE))
         if PI is None:
@@ -548,7 +413,15 @@ class Experiment():
         self.epsilon_decay = check_prob(EPSILON_DECAY)
 
         self.init_logger = False
-        self.init_logger = self.logger("Logger initialized.",False) 
+        self.last_time = 0
+        self.init_logger = self.logger("Logger initialized.",False)
+        self.logger(" - GPU Experiment -",False, False)
+        env_desc = "Environment Parameters -- Grid: {} Cost_f: '{}'\n Cost_Tree: {} Cost_Fire: {} Cost_hit: {}\n\
+            Cost_Empty: {} Cost_step: {} Cost_move: {}\n\
+            Min_obj: {} P_Fire: {} P_Tree: {}\n".format(ENV.grid.shape, ENV.reward_type, ENV.reward_tree, ENV.reward_fire, ENV.reward_hit,
+            ENV.reward_empty, ENV.reward_step, ENV.reward_move,
+            MIN_OBJECTIVE, ENV.p_fire, ENV.p_tree,)
+        self.logger(env_desc,False,False)
 
         # This class has its own random generator.
         self.rg = np.random.Generator(np.random.SFC64())
@@ -556,6 +429,8 @@ class Experiment():
         self.runs_rollout_results_step = []
         self.runs_heu_results = []
         self.runs_heu_results_step = []
+        self.runs_rollout_archive = []
+        self.runs_heu_archive = []
         self.c_runs = 0
         self.theres_run_gif = False
         self.theres_test_gif = False
@@ -565,18 +440,6 @@ class Experiment():
         self.frames_test_r = []
 
         self.mod = "Cost"
-
-        cpu_sys = os.cpu_count()
-        if N_WORKERS == 1:
-            self.cpus = 1
-        elif N_WORKERS == -1:
-            self.cpus = cpu_sys # ALL YOUR BASE ARE BELONG TO US, with SMT by default
-        elif N_WORKERS < 0 or N_WORKERS > cpu_sys:
-            self.logger("N_WORKERS = {} is not valid. The computer has up to {} threads only.".format(N_WORKERS, cpu_sys))
-            self.cpus = cpu_sys // 2  # half of thread given, bye SMT
-        else:
-            self.cpus = N_WORKERS
-        self.logger("Assigning {} threads of the CPU for experiment workers.".format(self.cpus))
     
     def __del__(self):
         self.logger("The experiment is OVER!")
@@ -585,6 +448,24 @@ class Experiment():
         del self.env
         del self.PI
         return None
+
+    def reset(self):
+        # Free memory.
+        self.env.checkpoints = []
+        self.env_h.checkpoints = []
+        self.runs_rollout_results = []
+        self.runs_rollout_results_step = []
+        self.runs_heu_results = []
+        self.runs_heu_results_step = []
+        self.runs_rollout_archive = []
+        self.runs_heu_archive = []
+        self.frames_run_r = []
+        self.frames_run_h = []
+        self.frames_test_r = []
+        self.theres_run_gif = False
+        self.theres_test_gif = False
+        self.c_runs = 0
+        self.epsilon = self.epsilon_op
 
     def run(self, GIF=None, GRAPH=True):
         """
@@ -605,12 +486,9 @@ class Experiment():
             RUN_GIF = GIF
         else:
             RUN_GIF = self.RUN_GIF
-        self.logger("Run {} - Metadata: alpha-{} epsilon-{} epsilon_decay-{} k-{} LH-{} n_samples-{}".format(
-            self.c_runs, self.alpha, self.epsilon_op, self.epsilon_decay, self.K, self.LOOKAHEAD, self.N_SAMPLES), time=False)
-        self.logger(" |")
         # Reseting env and storing the initial observations
         observation = self.env.reset()
-        observation_h = observation
+        observation_1 = observation
         #Making copy of the env to apply the heuristic
         self.env_h = self.env.copy()
         # Making checkpoints
@@ -622,7 +500,7 @@ class Experiment():
         RO_RESULTS_C=[]
         H_RESULTS_C=[]
         # Measuring time of execution. 
-        start = time.time()
+        self.logger("Run {} - Metadata: {}\n |".format(self.c_runs, self.metadata_str), True, True, True)
         # First loop to execute an rollout experiment.
         for n_test in range(self.N_TRAIN):
             # In order to compare the advance between the two environments
@@ -630,7 +508,7 @@ class Experiment():
             # This ones should advance equally on the all the run, but the samples
             # as they are copies they generate a new random gen, so the samples wont suffer
             # from this
-            M_SEED = int(self.rg.random()*10**4)
+            M_SEED = int(self.rg.random()*10**4)    
             self.env.rg = np.random.Generator(np.random.SFC64(M_SEED))
             self.env_h.rg = np.random.Generator(np.random.SFC64(M_SEED))    
             self.logger(" |-- Test : {} of {}".format(n_test+1, self.N_TRAIN))
@@ -647,30 +525,28 @@ class Experiment():
             for i in bar:
                 #Calls Rollout Strategy and returns action,qvalue
                 env_state = self.env.Encode() # The observed state encoded
-                r_action, q_value = Rollout(
+                r_action, q_value = Rollout_gpu(
                     self.env, 
-                    self.H,
+                    H=self.H_mode,
                     alpha=self.alpha,
                     epsilon=self.epsilon,
                     K=self.K,
                     lookahead=self.LOOKAHEAD,
                     N_samples=self.N_SAMPLES,
-                    H_args = self.H_args,
-                    n_workers = self.cpus,
                     min_objective=self.min_obj,
                     rg=self.rg)
                 #Update epsilon it goes from stochastic to deterministic 
                 self.epsilon = self.epsilon * self.epsilon_decay
                 #Calls Heuristic and return best action
-                To_H = self.H_args.copy()
+                To_H = dict()
                 To_H['env'] = self.env_h
-                To_H['observation'] = observation_h
+                To_H['observation'] = observation_1
                 h_action = self.H(To_H)
                 #Update Policy        
                 self.PI.new(env_state, r_action, q_value)
                 #Helicopter take an action based on Rollout strategy and heuristic
                 observation, ro_cost, _, _ = self.env.step(r_action)
-                observation_h, h_cost, _, _ = self.env_h.step(h_action)
+                observation_1, h_cost, _, _ = self.env_h.step(h_action)
                 if RUN_GIF and (n_test == self.N_TRAIN - 1):
                     # Framing just the last round
                     self.env.frame(title="Rollout step {}-th".format(i))
@@ -681,7 +557,6 @@ class Experiment():
                 #Update Heuristic Total cost
                 heuristic_cost += h_cost
                 heuristic_cost_step.append(heuristic_cost)
-                #self.logger("Sync" if self.env.rg.random() == self.env_h.rg.random() else 'NotSync')
                 #Generate a message
                 msg =    " |   |      |"
                 msg += "\n |   |      |-- Agent step {}".format(i)
@@ -703,10 +578,8 @@ class Experiment():
             RO_RESULTS_C.append(rollout_cost_step)
             H_RESULTS_C.append(heuristic_cost_step)
         msg = " | Run {} done.".format(self.c_runs)
-        msg+= "\nMetadata: alpha-{} epsilon-{} epsilon_decay-{} k-{} LH-{} n_samples-{}".format(
-                self.alpha, self.epsilon_op, self.epsilon_decay, self.K, self.LOOKAHEAD, self.N_SAMPLES)
-        self.logger(msg, time=False)
-        self.logger("Total run time %.2f s"%(time.time()-start))
+        msg+= "\nMetadata: {}\n |".format(self.metadata_str)
+        self.logger(msg, True, True, True)
 
         # Saving to the class
         self.runs_rollout_results += RO_RESULTS
@@ -714,7 +587,7 @@ class Experiment():
         self.runs_heu_results += H_RESULTS
         self.runs_heu_results_step += H_RESULTS_C
         if GRAPH:
-            self.make_graph(title_head='Run {}'.format(self.c_runs), mod=self.mod)
+            self.make_graph(title_head='Run:{} H:{} LH:{}'.format(self.c_runs,self.H_mode,self.LOOKAHEAD), mod=self.mod)
         self.c_runs += 1
         # Saving data to generate gif
         if RUN_GIF: 
@@ -725,22 +598,6 @@ class Experiment():
             self.theres_run_gif = True
         
         return None
-
-    def reset(self):
-        # Free memory.
-        self.env.checkpoints = []
-        self.env_h.checkpoints = []
-        self.runs_rollout_results = []
-        self.runs_rollout_results_step = []
-        self.runs_heu_results = []
-        self.runs_heu_results_step = []
-        self.frames_run_r = []
-        self.frames_run_h = []
-        self.frames_test_r = []
-        self.theres_run_gif = False
-        self.theres_test_gif = False
-        self.c_runs = 0
-
     
     def policy_test(self, N_TEST=5, N_STEPS=20, PI_MODE=None, EPSILON=None, GIF=True,
     GRAPH=True):
@@ -772,12 +629,9 @@ class Experiment():
             RUN_GIF = GIF
         else:
             RUN_GIF = self.RUN_GIF
-        self.logger("Testing policy. Metadata: epsilon-{} k-{} LH-{} n_test-{} n_steps-{}".format(
-                EPSILON, self.K, self.LOOKAHEAD, N_TEST, N_STEPS), time=False)
-        self.logger(" |")
         # Reseting env and storing the initial observations
         observation = self.env.reset()
-        observation_h = observation
+        observation_h = observation.copy()
         #Making copy of the env to apply the heuristic
         self.env_h = self.env.copy()
         # Making checkpoints
@@ -790,8 +644,7 @@ class Experiment():
         H_RESULTS_C=[]
         pi_calls = 0
         calls = 0
-        # Measuring time of execution. 
-        start = time.time()
+        self.logger("Testing policy. Metadata: {}\n |".format(self.metadata_str), True, True, True)
         # First loop to execute an rollout experiment.
         for n_test in range(N_TEST):
             M_SEED = int(self.rg.random()*10**4)
@@ -824,7 +677,7 @@ class Experiment():
                         s = "Exploration Step"
                     else:
                         # Explotation with H
-                        To_H = self.H_args.copy()
+                        To_H = dict()
                         To_H['env'] = self.env
                         To_H['observation'] = observation
                         action = self.H(To_H)
@@ -836,7 +689,7 @@ class Experiment():
                 #Update epsilon it goes from stochastic to deterministic 
                 epsilon = epsilon * self.epsilon_decay
                 #Calls Heuristic and return best action
-                To_H = self.H_args.copy()
+                To_H = dict()
                 To_H['env'] = self.env_h
                 To_H['observation'] = observation_h
                 h_action = self.H(To_H)
@@ -876,18 +729,17 @@ class Experiment():
             # Reseting the environment
             observation = self.env.reset()
             obvservation_h = self.env_h.reset()
-        msg = " | Test done. Metadata: epsilon-{} k-{} LH-{} n_test-{} n_steps-{}".format(
-                EPSILON, self.K, self.LOOKAHEAD, N_TEST, N_STEPS)
-        self.logger(msg, time=False)
+        msg = " | Test done. Metadata: {}\n |".format(self.metadata_str)
+        self.logger(msg, True, False, True)
         self.logger("Percentage of successful calls to policy: %.2f"%(pi_calls/calls*100), time=False)
-        self.logger("Total run time %.2f s"%(time.time()-start))
         # Saving to the class
         self.runs_rollout_results += RO_RESULTS
         self.runs_rollout_results_step += RO_RESULTS_C
         self.runs_heu_results += H_RESULTS
         self.runs_heu_results_step += H_RESULTS_C
         if GRAPH:
-            t_head = 'Test - %.2f pi success'%(pi_calls/calls)
+            t_head = 'Test Pi_Calls:%.2f'%(pi_calls/calls)
+            t_head+= " H:{} LH:{}".format(self.H_mode,self.LOOKAHEAD)
             self.make_graph(title_head=t_head, mod=self.mod)
         # Saving to generate the GIF
         if RUN_GIF: 
@@ -895,8 +747,191 @@ class Experiment():
             self.env.frames = []
             self.theres_test_gif = True
 
+    def run_multiple_LH(self, LHS = [1], GRAPH=True, dpi=200, save_arr=True):
+        """
+        Creates an initial state from reseting the environment and runs all the number of train
+        iterations and so on. This updates the policy with more states or with better actions.
 
-    def make_graph(self, title_head='',mod='Cost',dpi=120):
+        Parameters
+        ----------
+        GIF : bool 
+            Variable to indicate if you desired to generate frames for the last 
+            train loop of the run, if the class was initialized with this behavior on this one
+            changes nothing. Default False.
+        GRAPH : bool
+            Draws and saves the graphs from the experiment. If there's not a graph generated and
+            one does not restarts the class 
+        """
+        l_LHS = len(LHS)
+        # Storing in 0 for the heuristic
+        H_env = self.env.copy()
+        observation = H_env.reset()
+        ENVS = [H_env]
+        OBS = [observation]
+        # Acumulate costs (LHS, N_TRAIN)
+        COSTS = np.zeros((l_LHS+1,self.N_TRAIN), dtype=np.float32)
+        # Per step costs (LHS, N_TRAIN, TOT_STEPS)
+        COSTS_STEP = np.zeros((l_LHS+1, self.N_TRAIN, self.env.moves_before_updating * self.N_STEPS), dtype=np.float32)
+        CHECKPOINTS = []
+        # Reseting env and storing the initial observations
+        for i in range(l_LHS):
+            ENVS.append(H_env.copy())
+            OBS.append(observation)
+        # making checkpoints
+        for i in range(l_LHS + 1):
+            CHECKPOINTS += [ENVS[i].make_checkpoint()]
+        # Measuring time of execution. 
+        self.logger("Run for LHs {} - Metadata: {}\n |".format(LHS, self.metadata_str), True, True, True)
+        # First loop to execute an rollout experiment.
+        for n_test in range(self.N_TRAIN):
+            # Sync the random generators
+            M_SEED = int(self.rg.random()*10**4)
+            for i in range(l_LHS + 1):
+                ENVS[i].rg = np.random.Generator(np.random.SFC64(M_SEED))
+            self.logger(" |-- Test : {} of {}".format(n_test+1, self.N_TRAIN))
+            # Making a checkpoint from the initial state generated.         
+            for i in range(l_LHS + 1):
+                ENVS[i].load_checkpoint(CHECKPOINTS[i])
+            # Setting up vars to store costs
+            # Making the progress bar
+            bar = tqdm.tqdm(range(self.env.moves_before_updating * self.N_STEPS), miniters=0)
+            for stp in bar:
+                actions = []
+                #Calls Heuristic and return best action
+                To_H = dict()
+                To_H['env'] = ENVS[0]
+                To_H['observation'] = OBS[0]
+                actions += [self.H(To_H)]
+                #Calls Rollout Strategy and returns action,qvalue
+                for i in range(1, l_LHS + 1):
+                    r_action, _ = Rollout_gpu(
+                        ENVS[i], 
+                        H=self.H_mode,
+                        alpha=self.alpha,
+                        epsilon=self.epsilon,
+                        K=self.K,
+                        lookahead=LHS[i-1],
+                        N_samples=self.N_SAMPLES,
+                        min_objective=self.min_obj,
+                        rg=self.rg)
+                    actions += [r_action]
+                #Update epsilon it goes from stochastic to deterministic 
+                self.epsilon = self.epsilon * self.epsilon_decay
+                #Helicopter take an action based on Rollout strategy and heuristic
+                for i in range(1 + l_LHS):
+                    OBS[i], cost, _, _ = ENVS[i].step(actions[i])
+                    COSTS[i,n_test] += cost #Acumulative cost for rollout per LH
+                    COSTS_STEP[i,n_test,stp] = COSTS[i,n_test] #List of cost over time
+                #Generate a message
+                msg =    " |   |      |"
+                msg += "\n |   |      |-- Agent step {}".format(stp)
+                msg += "\n |   |      |   '-- Actions: {} Costs : {}".format(actions, COSTS_STEP[:, n_test, stp])
+                bar.write(msg)
+                self.logger(msg, False, False)
+            bar.close()
+            msg =    " |   |"
+            msg += "\n |   |-- Test {} results".format(n_test+1)
+            msg += "\n |   |    '-- Actions: {} Costs : {}".format(actions, COSTS[:, n_test])
+            msg += "\n |"
+            self.logger(msg)
+        msg = " | Run for LHS {} done.".format(LHS)
+        msg+= "\nMetadata: {}\n |".format(self.metadata_str)
+        self.logger(msg, True, True, True)
+        time_s = Experiment.time_str()
+
+        if GRAPH:
+            # Making graph here
+            Experiment.check_dir("Runs")
+
+            sns.set(context="paper", style="whitegrid")
+            n_cols = 2
+            n_rows = math.ceil(l_LHS / n_cols)
+            #fig = plt.figure(figsize=(3*n_cols,2*n_rows),dpi=dpi)
+            fig, axs = plt.subplots(n_rows,n_cols, 
+                    figsize=(4*n_cols,3*n_rows),dpi=dpi,sharex=True, sharey=True,
+                    gridspec_kw={'hspace': 0, 'wspace': 0})
+            fig.suptitle('Rollout Avg. {}/Step'.format(self.mod))
+
+            # ASTHETICS
+            y_ticks_rotation = 30
+            alpha_fill = 0.10
+            alpha_line = 0.8
+            alpha_p = 0.65
+            lw = 2
+            l_h = "H_mode {}".format(self.H_mode)
+            c_h = sns.xkcd_rgb['cobalt blue']
+            alpha_h = 0.9
+            alpha_fill_h = 0.09
+            mar_s_h = 0.8
+            filled_markers = ('o', 'v', '^', '<', '>', '8', 's', 'p', '*', 'h', 'H', 'D', 'd', 'P', 'X')
+            colors = sns.color_palette("husl", l_LHS + 1)
+            # END
+
+            # First graph - Avg. Cost per step of all test
+            # Acumulative cost per step per test
+            x_1 = range(self.env.moves_before_updating * self.N_STEPS)
+            x_2 = range(1, self.N_TRAIN + 1)
+            mean_h = np.mean(COSTS_STEP[0], axis=0)
+            std_h = np.std(COSTS_STEP[0],axis=0)
+            
+            for i in range(1, l_LHS+1):
+                ax = axs[(i-1)//n_cols,(i-1)%n_cols]
+                mean = np.mean(COSTS_STEP[i], axis=0)
+                std = np.std(COSTS_STEP[i], axis=0)
+                l = "Rollout LH {}".format(LHS[i-1])
+                c = colors[i]
+                m = filled_markers[i]
+                ax.plot(x_1, mean_h, label=l_h, alpha=alpha_h, color=c_h, lw=lw, ls='-.')
+                #ax.fill_between(x_1, mean_h-std_h, mean_h+std_h, alpha=alpha_fill_h, color=c_h)
+                ax.scatter(x_1, mean_h-std_h, s=mar_s_h, alpha=alpha_p, color=c_h, marker=filled_markers[0])
+                ax.scatter(x_1, mean_h+std_h, s=mar_s_h, alpha=alpha_p, color=c_h, marker=filled_markers[0])
+                ax.plot(x_1, mean, label=l, alpha=alpha_line, color=c, lw=lw)
+                ax.fill_between(x_1, mean-std, mean+std, alpha=alpha_fill, color=c)
+                #ax.scatter(x_1, mean-std, alpha=alpha_p, color=c, lw=pw, marker=m)
+                #ax.scatter(x_1, mean+std, alpha=alpha_p, color=c, lw=pw, marker=m)
+                ax.set(xlabel='Step', ylabel='Average '+ self.mod)
+                #ax.set_yticks(rotation=y_ticks_rotation)
+                ax.legend()
+            for ax in axs.flat:
+                ax.label_outer()
+            plt.savefig(
+                "./Runs/Rollout avg cost-step LHS {} {} -- {}.png".format(LHS,self.metadata_str, time_s))
+            plt.clf() # cleaning figure
+
+            # Doing graph cost per test.
+            # Cost per test
+            fig = plt.figure(figsize=(10,6),dpi=dpi)
+            for i in range(l_LHS + 1):
+                if i == 0:
+                    l = "H_mode {}".format(self.H_mode)
+                    ls_ = '-.'
+                    al = alpha_h
+                else:
+                    l = "Rollout LH {}".format(LHS[i-1])
+                    ls_ = '-'
+                    al = alpha_line
+                plt.plot(x_2, COSTS[i], label=l, color=colors[i], alpha=al, ls=ls_)
+            plt.xlabel('Test')
+            plt.ylabel(self.mod)
+            plt.yticks(rotation=y_ticks_rotation)
+            plt.title('Rollout {}/Test'.format(self.mod))
+            plt.legend()
+            plt.savefig(
+                "./Runs/Rollout cost-test LHS {} {} -- {}.png".format(LHS, self.metadata_str, time_s))
+            plt.clf()
+
+        if save_arr:
+            f1 = open("./Logs/rollout COSTS_STEP LHS {} -- {}.npy".format(LHS, time_s), 'wb')
+            np.save(f1, COSTS_STEP)
+            f2 = open("./Logs/rollout COSTS LHS {} -- {}.npy".format(LHS, time_s), 'wb')
+            np.save(f2, COSTS)
+            f1.close()
+            f2.close()
+            self.logger("Numpy Arrays save on ./Logs with time {}".format(time_s), time=False)
+
+        return None
+
+    def make_graph(self, title_head='',mod='Cost',dpi=200):
         """
         Method to graph and save two graphs per expriment. An average cost 
         per step on all the test. And a progession of average cost of the per 
@@ -915,44 +950,69 @@ class Experiment():
         Experiment.check_dir("Runs")
         time_s = Experiment.time_str()
 
+        self.runs_rollout_archive += [self.runs_rollout_results_step]
+        self.runs_heu_archive += [self.runs_heu_results_step]
+
+        sns.set(context="paper", style="whitegrid")
+        fig = plt.figure(figsize=(10,6),dpi=dpi)
+        y_ticks_rotation = 30
+        r_color = sns.xkcd_rgb["medium green"]
+        h_color = sns.xkcd_rgb["denim blue"]
+        alpha_fill = 0.1
+        alpha_line = 0.6
+        alpha_h = 0.9
+        lw = 2
+        pw = 1
+        h_mark = 'o'
+
         # First graph - Avg. Cost per step of all test
         # Acumulative cost per step per test
         R_RESULTS_STEPS = np.array(self.runs_rollout_results_step) 
         H_RESULTS_STEPS = np.array(self.runs_heu_results_step)
         x = range(R_RESULTS_STEPS.shape[1])
-        plt.plot(x, np.mean(R_RESULTS_STEPS, axis=0), label='Rollout')
-        plt.plot(x, np.mean(H_RESULTS_STEPS, axis=0), label='Heuristic')
+        mean_r = np.mean(R_RESULTS_STEPS, axis=0)
+        std_r = np.std(R_RESULTS_STEPS, axis=0)
+        plt.plot(x, mean_r, label='Rollout', alpha=alpha_line, color=r_color, lw=lw)
+        plt.fill_between(x, mean_r-std_r, mean_r+std_r, alpha=alpha_fill, color=r_color)
+        #plt.scatter(x, mean_r-std_r, alpha=alpha_line, color=r_color, lw=pw, marker=r_mark)
+        #plt.scatter(x, mean_r+std_r, alpha=alpha_line, color=r_color, lw=pw, marker=r_mark)
+        mean_h = np.mean(H_RESULTS_STEPS, axis=0)
+        std_h = np.std(H_RESULTS_STEPS, axis=0)
+        plt.plot(x, mean_h, label='Heuristic', alpha=alpha_h, color=h_color, lw=lw, ls='-.')
+        #plt.fill_between(x, mean_h-std_h, mean_h+std_h, alpha=alpha_fill, color=h_color)
+        plt.scatter(x, mean_h-std_h, alpha=alpha_h, color=h_color, s=pw, marker=h_mark)
+        plt.scatter(x, mean_h+std_h, alpha=alpha_h, color=h_color, s=pw, marker=h_mark)
         plt.xlabel('Step')
         plt.ylabel('Average '+mod)
+        plt.yticks(rotation=y_ticks_rotation)
         if title_head != '':
-            plt.title('{} - Rollout results average {}/Step'.format(title_head,mod))
+            plt.title('{} - Rollout Avg. {}/Step'.format(title_head,mod))
         else:
-            plt.title('Rollout results average tests {}/Step'.format(mod))
+            plt.title('Rollout Avg. {}/Step'.format(mod))
         plt.legend()
         plt.savefig(
-            "./Runs/Rollout avg cost-step alpha-{} epsilon-{} epsilon_decay-{} k-{} LH-{} n_samples-{} -- {}.png".format(
-                self.alpha, self.epsilon_op, self.epsilon_decay, self.K, self.LOOKAHEAD, self.N_SAMPLES,
-                time_s))
+            "./Runs/Rollout avg cost-step {} -- {}.png".format(self.metadata_str, time_s))
         plt.clf() # cleaning figure
+
         # Doing graph cost per test.
         # Cost per test
         R_RESULTS_TEST = np.array(self.runs_rollout_results)
         H_RESULTS_TEST = np.array(self.runs_heu_results) 
         x = range(1, len(self.runs_rollout_results)+1)
-        plt.plot(x, R_RESULTS_TEST, label='Rollout')
-        plt.plot(x, H_RESULTS_TEST, label='Heuristic')
+        plt.plot(x, R_RESULTS_TEST, label='Rollout', color=r_color, alpha=alpha_line)
+        plt.plot(x, H_RESULTS_TEST, label='Heuristic', color=h_color, alpha=alpha_line, ls='-.')
         plt.xlabel('Test')
         plt.ylabel(mod)
+        plt.yticks(rotation=y_ticks_rotation)
         if title_head != '':
-            plt.title('{} - Rollout results {}/Test'.format(title_head,mod))
+            plt.title('{} - Rollout {}/Test'.format(title_head,mod))
         else:
-            plt.title('Rollout results {}/step'.format(mod))
+            plt.title('Rollout {}/step'.format(mod))
         plt.legend()
         plt.savefig(
-            "./Runs/Rollout cost-test alpha-{} epsilon-{} epsilon_decay-{} k-{} LH-{} n_samples-{} -- {}.png".format(
-                self.alpha, self.epsilon_op, self.epsilon_decay, self.K, self.LOOKAHEAD, self.N_SAMPLES,
-                time_s))
+            "./Runs/Rollout cost-test {} -- {}.png".format(self.metadata_str, time_s))
         plt.clf()
+
         # Clean the buffers
         self.runs_rollout_results = []
         self.runs_rollout_results_step = []
@@ -978,29 +1038,24 @@ class Experiment():
         Experiment.check_dir("Runs")
         time_s = Experiment.time_str()
         if RUN and (self.theres_run_gif):
-            self.logger("Creating gif for runs. This may take a while.")
-            imageio.mimsave("./Runs/Helicopter Rollout Run alpha-{} epsilon-{} epsilon_decay-{} k-{} LH-{} n_samples-{} -- {}.gif".format(
-                self.alpha, self.epsilon_op, self.epsilon_decay, self.K, self.LOOKAHEAD, self.N_SAMPLES, time_s), 
+            self.logger("Creating gif for runs. This may take a while.",time_delta=True)
+            imageio.mimsave("./Runs/Helicopter Rollout Run {} -- {}.gif".format(self.metadata_str, time_s), 
                 self.frames_run_r, fps=fps)
             self.frames_run_r = []
-            heu_par = ''
-            for arg in self.H_args.keys():
-                heu_par += ' ' + str(arg) + '-' + str(self.H_args[arg])
-            imageio.mimsave("./Runs/Helicopter Heuristic Run --{} -- {}.gif".format(heu_par,time_s),
+            imageio.mimsave("./Runs/Helicopter Heuristic Run -- H_mode {} -- {}.gif".format(self.H_mode, time_s),
                 self.frames_run_h, fps=fps)
             self.frames_run_h = []
             self.theres_run_gif = False
-            self.logger("Run gif. Done!\n")
+            self.logger("Run gif. Done!\n",time_delta=True)
         if TEST and self.theres_test_gif:
-            self.logger("Creating gif for tests. This may take a while.")
-            imageio.mimsave("./Runs/Helicopter Rollout Test alpha-{} epsilon-{} epsilon_decay-{} k-{} LH-{} n_samples-{} -- {}.gif".format(
-                self.alpha, self.epsilon_op, self.epsilon_decay, self.K, self.LOOKAHEAD, self.N_SAMPLES, time_s),
+            self.logger("Creating gif for tests. This may take a while.",time_delta=True)
+            imageio.mimsave("./Runs/Helicopter Rollout Test {} -- {}.gif".format(self.metadata_str, time_s),
                 self.frames_test_r, fps=fps)
             self.frames_test_r = []
             self.theres_test_gif = False
-            self.logger("Test gif. Done!\n")
+            self.logger("Test gif. Done!\n",time_delta=True)
         return None
-    
+
     def save_policy(self, name_out=None):
         """
         Saves the actual policy object in a pickle dump file with extension .pi
@@ -1014,8 +1069,7 @@ class Experiment():
         name = name_out
         if name is None:
             # Default name scheme
-            name = "Policy_Rollout Runs-{} alpha-{} epsilon-{} epsilon_decay-{} k-{} LH-{} n_samples-{} -- {}".format(
-                self.c_runs ,self.alpha, self.epsilon_op, self.epsilon_decay, self.K, self.LOOKAHEAD, self.N_SAMPLES, self.time_str())
+            name = "Policy_Rollout {} -- {}".format(self.metadata_str, self.time_str())
         file_h = open("./Policies/"+name+".pi",'wb')
         pickle.dump(self.PI,file_h)
         file_h.close()
@@ -1066,7 +1120,7 @@ class Experiment():
             self.logger("Policy {} loaded.\n".format(name_in))
         print(self.PI)
 
-    def logger(self, msg, prnt=True, time=True):
+    def logger(self, msg, prnt=True, time=True, time_delta=False):
         """
         Just a method to save most of the print information in a file while the Experiment
         exists.
@@ -1083,22 +1137,43 @@ class Experiment():
         if self.init_logger == False:
             self.check_dir("Logs")
             self.logfile = open("./Logs/rollout_log_{}.txt".format(self.time_str()),'wt')
+            if time_delta:
+                if self.last_time == 0:
+                    self.last_time = Time.time()
+                total_time = Time.time() - self.last_time
+                delta = " - delta-time {}h: {}m: {}s".format(int(total_time//3600), int(total_time//60 - total_time//3600*60), int(total_time % 60))
+                self.last_time = Time.time()
+                msg += delta
             if prnt:
-                print(msg,end='\n')
+                print(msg,end="\n")
             if time:
                 msg += " -- @ {}".format(self.time_str())
             self.logfile.write(msg+"\n")
             return True
         else:
+            if time_delta:
+                if self.last_time == 0:
+                    self.last_time = Time.time()
+                total_time = Time.time() - self.last_time
+                delta = " -- delta-time {}h: {}m: {}s".format(int(total_time//3600), int(total_time//60 - total_time//3600*60), int(total_time % 60))
+                self.last_time = Time.time()
+                msg += delta
             if prnt:
                 print(msg,end="\n")
             if time:
                 msg += " -- @ {}".format(self.time_str())
-            self.logfile.write(msg+"\n")   
+            self.logfile.write(msg+"\n")
+
+    @property
+    def metadata_str(self):
+        msg = "LH-{} K-{} H_mode-{} N_SAMPLES-{}  ALPHA-{} EPSILON-{} E_DECAY-{}".format(
+            self.LOOKAHEAD, self.K, self.H_mode, self.N_SAMPLES, self.alpha, 
+            self.epsilon_op, self.epsilon_decay)
+        return msg
 
     @staticmethod
     def time_str():
-        return time.strftime("%d-%m-%Y-%H:%M:%S", time.gmtime())
+        return Time.strftime("%d-%m-%Y-%H:%M:%S", Time.gmtime())
 
     @staticmethod
     def check_dir(dir):
@@ -1107,4 +1182,4 @@ class Experiment():
         if not dir in ls:
             print("Creating a folder {}".format(dir))
             os.mkdir(dir)
-        time.sleep(1)
+        Time.sleep(1)

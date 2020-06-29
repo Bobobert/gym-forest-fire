@@ -1,0 +1,10 @@
+# ROB WAS HERE
+# Required Python packages
+python==3.6
+tdqm==4.41
+matplotlib==3.1
+imageio==2.8
+numpy==1.18
+numba==0.49
+llvmlite==0.32
+seaborn==0.8

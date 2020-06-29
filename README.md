@@ -17,7 +17,7 @@ Using the class Experiment from the rollout.py makes easier and clean to set-up 
 Automatic gif archives generation from runs or tests.
 
 ![](pics/run_rollout_0.gif)
-![](pics/run_heuritic_0.gif)
+![](pics/run_heuristic_0.gif)
 
 
 ### Each run generates automatic logs and graphs

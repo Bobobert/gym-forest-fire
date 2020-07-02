@@ -690,17 +690,25 @@ class EnvMakerForestFire(Helicopter):
             reward += self.steps
         elif self.reward_type == 'custom': #RWH
             # Custom COST function.
-            # Trees do decrease the cost
             reward += self.cell_counts[self.tree] * self.reward_tree
-            #reward += self.cell_counts[self.empty] * self.reward_empty
-            # Each fire adds lot of urgency adding the potential cost
-            # of each
-            reward += self.cell_counts[self.fire] * self.reward_fire
-            # Do a less impact of having a tree to motivate the 
-            # no fire policy, but not much to let all the trees catch fire
+            reward += self.cell_counts[self.fire]**2 * self.reward_fire
             reward += self.hit * self.reward_hit
             reward += self.cell_counts[self.empty] * self.reward_empty
             reward += self.reward_move if self.last_move else 0
+        elif self.reward_type == 'quad':
+            diff = self.cell_counts[self.tree] - self.cell_counts[self.fire]
+            reward += math.copysign(diff**2, diff) * self.reward_tree
+            reward += (self.hit*2.0 - self.last_move*1.0) * self.reward_hit
+            reward += self.cell_counts[self.empty] * self.reward_empty
+        elif self.reward_type == 'ratio':
+            ratio = 0.0
+            if self.cell_counts[self.fire] > 0:
+                ratio = self.cell_counts[self.tree] / self.cell_counts[self.fire]
+            else:
+                ratio = self.n_row*self.n_col
+            reward += self.reward_tree*(ratio)
+            reward += (self.hit*2.0 - self.last_move*1.0) * self.reward_hit
+            reward += self.cell_counts[self.empty] * self.reward_empty
         else:
             raise ValueError('Unrecognized reward type')
         return reward

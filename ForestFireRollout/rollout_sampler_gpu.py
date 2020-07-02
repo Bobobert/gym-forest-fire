@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Created on jun 2020
-v 0.3
+v 0.3.1
 
 @author: bobobert
 
@@ -12,10 +12,10 @@ and the function to pass the objective function back.
 WARNING!
 The heuristic can't be passed yet as an object, they need to be reprogramed in here 
 with the cuda.jit(device=True) decorator to compile and run in a thread.
+- Fixed some mistakes on the sampler
 """
 # TODO 
 # add prunning to the sampler inside the n_sample bucle
-
 
 # Rob was here
 from numba import cuda
@@ -58,56 +58,20 @@ L_AS = 9
 GRID_SIZE = (   16,   16)
 
 # Design sizes, do not change until the kernel functions are changed as well
-PARAMETERS_SIZE = 7
+PARAMETERS_SIZE = 8
 COSTS_SIZE = 6
 PROBS_SIZE = 2
-
 
 ###### PROGRAM HERE YOUR HEURISTICs ######
 ### ASING THEM INTO A SWITH MODE USE #####
 @cuda.jit(device=True)
 def Heuristic(local_grid, pos_row, pos_col, steps_to_update, parameters, probs, costs, random_states, worker):
     h_mode = parameters[6]
-
     if h_mode == 0:
         # dummy heuristic, by rob. It took around 5 hrs to write this one
         return 3
-
     elif h_mode == 11:
-        # Heuristic from Mau
-        # Corrective, vision = 1
-        action = 5
-        VISION = 1
-        burned = 0
-        # Count the burned cells on the neighborhood
-        for i in range(pos_row - VISION, pos_col + VISION + 1):
-            for j in range(pos_col - VISION, pos_col + VISION + 1):
-                if local_grid[i,j] == FIRE:
-                    burned += 1
-        if burned == 0:
-            for i in range(1, 10):
-                if rdm_uniform_sample(random_states, worker) < 0.112:
-                    action = i
-        else:
-            p =  1 / burned
-            for i in range(pos_row - VISION, pos_col + VISION + 1):
-                for j in range(pos_col - VISION, pos_col + VISION + 1):
-                    if (i < 0) or (i >= GRID_SIZE[0]):
-                        # Out of boundaries, can't go there.
-                        0.0
-                    elif (j < 0) or (j >= GRID_SIZE[1]):
-                        # Out of boundaries, can't go there
-                        0.0
-                    elif local_grid[i,j] == FIRE:
-                        # This could be the action
-                        if action == 0:
-                            # Go greedy
-                            action = 3*(i - pos_row + 1) + (j - pos_col + 1) + 1
-                        elif rdm_uniform_sample(random_states, worker) < p:
-                            # Take a coin to chose it or not
-                            action = 3*(i - pos_row + 1) + (j - pos_col + 1) + 1
-        return action
-
+        return CONSERVATIVE(local_grid, pos_row, pos_col, steps_to_update, parameters, probs, costs, random_states, worker, 1)
     elif h_mode == 12:
         return CONSERVATIVE(local_grid, pos_row, pos_col, steps_to_update, parameters, probs, costs, random_states, worker, 2)
     elif h_mode == 13:
@@ -162,7 +126,6 @@ def CONSERVATIVE(local_grid, pos_row, pos_col, steps_to_update, parameters, prob
                 elif (i >= 0) and (i < NS) and (j > 1 + VISION ) and (j < NS):
                     #Right zone
                     cb[5] += 1
-
     non_zero = 0
     for i in range(9):
         if cb[i] > 0:
@@ -297,17 +260,15 @@ def PREVENTIVE(local_grid, pos_row, pos_col, steps_to_update, parameters, probs,
                         coef -= Empty_coef
                     cb[5] += coef
                     cz[5] += 1
-
     for i in range(9):
         # Normalize the coefficients
         if cz[i] != 0:
             cb[i] = cb[i] / cz[i]
         else:
             cb[i] = 0
-
     non_zero = 0
     for i in range(9):
-        if cb[i] > 0:
+        if cz[i] > 0:
             non_zero += 1
     if non_zero == 0:
         for i in range(1, 10):
@@ -335,7 +296,7 @@ def load_forest_fire_2_device(grid=None, grid_size=(20,20),
                             pos=(7,7),
                             actual_steps_before_update = 4,
                             steps_before_update = 4,
-                            seed=None, h_mode=0):
+                            seed=None, h_mode=0, c_mode=0):
     """
     This is a function that returns an explicit list to the device memory for it to access
     it for the other functions running on the device threads. Run before the kernel call to load
@@ -385,9 +346,9 @@ def load_forest_fire_2_device(grid=None, grid_size=(20,20),
     if seed == None:
         seed = int(np.random.random()*10**3)
     # This will be a int type array
-    #            pos_row, pos_col, actual_steps_before_update, steps_before_update, k, seed, h_mode
-    #               0        1              2                          3            4   5       6
-    parameters = [pos[0], pos[1], actual_steps_before_update, steps_before_update, k, seed, h_mode]
+    #            pos_row, pos_col, actual_steps_before_update, steps_before_update, k, seed, h_mode c_mode
+    #               0        1              2                          3            4   5       6      7
+    parameters = [pos[0], pos[1], actual_steps_before_update, steps_before_update, k, seed, h_mode, c_mode]
     parameters = np.array(parameters, dtype=NPTINT)
     #        costs_tree,  cost_fire,   cost_empty,   cost_hit,   cost_move,   alpha
     #             0           1            2             3           4          5
@@ -420,13 +381,6 @@ def get_leafs(action_set,
     """
     leafs = [trajectory for trajectory in itertools.product(action_set,repeat=depth)]
     return np.array(leafs, dtype=np.int8)
-    # Deprecated.
-    """if n_samples >= 1:
-        leafs = [trajectories for trajectories in itertools.repeat(leafs, n_samples)]
-        leafs = np.array(leafs, dtype=NPTINT)
-        return leafs.reshape(leafs.shape[0]*leafs.shape[1], leafs.shape[2])
-    else:
-        raise Exception("n_samples need to be equal or greater than 1. {} was given.".format(n_samples))"""
 
 @cuda.jit
 def sample_trajectories(grid, 
@@ -459,7 +413,7 @@ def sample_trajectories(grid,
         for i in range(GRID_SIZE[0]):
             for j in range(GRID_SIZE[1]):
                 local_grid[i,j] = env_initial_state[i,j]
-                updated_grid[i,j] = EMPTY
+                updated_grid[i,j] = env_initial_state[i,j]
         # Doing a sample given a trajectory
         # Initial conditions
         pos_row, pos_col = parameters[0], parameters[1]
@@ -513,7 +467,6 @@ def helicopter_step(grid,
     and give a step of the agent in its environment. This is meant
     to run inside the sample_trajectories kernel.
     """
-
     new_steps_before_updating = 0
 
     # Check if the grid needs to be updated
@@ -594,9 +547,10 @@ def helicopter_step(grid,
         updated_grid[new_pos_row, new_pos_col] = EMPTY
         hits += 1.0
     # End of hits
-
+    
     # Start to counting the cells
     fires, empties, trees = 0.0 ,0.0 ,0.0
+    f, t, ratio = 0.0, 0.0, 0.0
     for i in range(GRID_SIZE[0]):
         for j in range(GRID_SIZE[1]):
             if updated_grid[i,j] == FIRE:
@@ -605,17 +559,43 @@ def helicopter_step(grid,
                 trees += 1. 
             elif updated_grid[i,j] == EMPTY:
                 empties += 1.
+            if grid[i,j] == TREE:
+                t += 1
+            elif grid[i,j] == FIRE:
+                f += 1
+    if f > 0:
+        ratio = t/f
+    else:
+        ratio = GRID_SIZE[0]*GRID_SIZE[1]*1.0
+    ratio = -1.0*ratio
     # End of counting
 
-    # Calculating cost. 
+    # Calculating cost.
     ### This is the cost shape for a given state ### 
-    ### This is the same as 'custom' type on Helicopter Env ###
+    c_mode = parameters[7]
     cost = 0.0
-    cost += costs[0]*trees
-    cost += costs[1]*fires
-    cost += costs[2]*empties
-    cost += costs[3]*hits
-    cost += costs[4]*it_moved
+    if c_mode == 0:
+        ### This is the same as 'custom' type on Helicopter Env ###
+        cost += costs[0]*trees
+        cost += costs[1]*fires**2
+        cost += costs[2]*empties
+        cost += costs[3]*hits
+        cost += costs[4]*it_moved
+    elif c_mode == 1:
+        #Quad mode
+        diff = (trees-fires)
+        if diff < 0:
+            cost += -1.0 * diff**2 * costs[0]
+        else:
+            cost += diff**2 * costs[0]
+        cost += costs[2]*empties
+        cost += costs[3]*(2.0*hits-1.0*it_moved)
+    elif c_mode == 2:
+        #Ratio mode cost here
+        #cost += costs[0]*math.exp(ratio)
+        cost += -1.0*costs[0]*ratio
+        cost += costs[2]*empties
+        cost += costs[3]*(2.0*hits-1.0*it_moved)
     # End of cost
 
     return updated_grid, new_pos_row, new_pos_col, new_steps_before_updating, cost
@@ -641,7 +621,7 @@ def min_max(trajectories, results, n_samples, action_set, min_obj):
                     sample_avg[i] = sample_avg[i]*(s_c - 1) / s_c + c / s_c
                     sample_c[i] += 1
 
-    best_action, best_cost, obj = 0, np.inf, 1
+    best_action, best_cost, obj = 5, np.inf, 1
 
     if not min_obj:
         # Maximize
@@ -715,6 +695,15 @@ def sampler(env,
     assert (env.boundary == 'invariant') and \
         (env.forest_mode == 'stochastic'), \
         "The actual environment configuration is not supported in this sampler"
+    #Cost function mode
+    c_mode = 0
+    env_cost = env.reward_type
+    if env_cost == 'custom':
+        c_mode = 0
+    elif env_cost == 'quad':
+        c_mode = 1
+    elif env_cost == 'ratio':
+        c_mode = 2
     # CHANGING GLOBALS VARIABLES
     SAMPLER_CONST = globals()
     SAMPLER_CONST['LOOKAHEAD'] = lookahead
@@ -743,6 +732,7 @@ def sampler(env,
         p_fire=env.p_fire,
         p_tree= env.p_tree,
         alpha=alpha,
+        k=k,
         reward_tree=env.reward_tree,
         reward_fire=env.reward_fire,
         reward_empty=env.reward_empty,
@@ -752,7 +742,7 @@ def sampler(env,
         actual_steps_before_update=env.remaining_moves,
         steps_before_update=env.moves_before_updating,
         h_mode=h_mode,
-        k=k
+        c_mode=c_mode,
     )
     # Starting the kernel on the device to sample the trajectories
     results = []

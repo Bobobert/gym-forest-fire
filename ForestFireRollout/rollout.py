@@ -185,7 +185,7 @@ class Policy(object):
 
 def Rollout_gpu(
     env, 
-    H=0, 
+    H=0,
     alpha=1, 
     epsilon=0, 
     K=-1,
@@ -252,7 +252,7 @@ def Rollout_gpu(
         # Turning to exploration
         explotation = False
     if explotation: #Explotation step. Sampling all the expected values to chose greedy accordingly to rollout algorithm. 
-        best_action, best_cost, _ = sampler(env, h_mode=H, alpha=alpha, n_samples=N_samples, k=K,
+        best_action, best_cost, res = sampler(env, h_mode=H, alpha=alpha, n_samples=N_samples, k=K,
                                     lookahead=lookahead, min_obj=min_objective, seed=int(rg.random()*10**2))
     else: # Option to take an exploration step
         actions = list(env.action_set)
@@ -348,6 +348,8 @@ class Experiment():
     -------
     Experiment.run()
 
+    Experiment.run_multiple_LH()
+
     Experiment.policy_test()
 
     Experiment.make_graph()
@@ -418,9 +420,9 @@ class Experiment():
         self.logger(" - GPU Experiment -",False, False)
         env_desc = "Environment Parameters -- Grid: {} Cost_f: '{}'\n Cost_Tree: {} Cost_Fire: {} Cost_hit: {}\n\
             Cost_Empty: {} Cost_step: {} Cost_move: {}\n\
-            Min_obj: {} P_Fire: {} P_Tree: {}\n".format(ENV.grid.shape, ENV.reward_type, ENV.reward_tree, ENV.reward_fire, ENV.reward_hit,
+            Min_obj: {} P_Fire: {} P_Tree: {}\n Steps_To_Update {}".format(ENV.grid.shape, ENV.reward_type, ENV.reward_tree, ENV.reward_fire, ENV.reward_hit,
             ENV.reward_empty, ENV.reward_step, ENV.reward_move,
-            MIN_OBJECTIVE, ENV.p_fire, ENV.p_tree,)
+            MIN_OBJECTIVE, ENV.p_fire, ENV.p_tree, ENV.moves_before_updating)
         self.logger(env_desc,False,False)
 
         # This class has its own random generator.
@@ -438,6 +440,8 @@ class Experiment():
         self.frames_run_r = []
         self.frames_run_h = []
         self.frames_test_r = []
+        self.run_h_tcell = []
+        self.run_r_tcell = []
 
         self.mod = "Cost"
     
@@ -596,9 +600,93 @@ class Experiment():
             self.frames_run_h += self.env_h.frames
             self.env_h.frames = []
             self.theres_run_gif = True
-        
+            self.make_gif(RUN=True)
         return None
     
+    def ran(self, GRAPH=True):
+        """
+        Just a method to compare the perfomance between the best action of rollout and the
+        heuristic on the sample cost associated to that action. This is just for test. 
+        """
+        # Reseting env and storing the initial observations
+        observation = self.env.reset()
+        #Making copy of the env to apply the heuristic
+        # Making checkpoints
+        init_checkpoint_env = self.env.make_checkpoint()
+        # Lists to save the results from the N_TRAIN
+        RO_RESULTS=[]
+        RO_RESULTS_C=[]
+        # Measuring time of execution. 
+        self.logger("Run {} - Metadata: {}\n |".format(self.c_runs, self.metadata_str), True, True, True)
+        # First loop to execute an rollout experiment.
+        for n_test in range(self.N_TRAIN):
+            M_SEED = int(self.rg.random()*10**4)    
+            self.env.rg = np.random.Generator(np.random.SFC64(M_SEED))    
+            self.logger(" |-- Test : {} of {}".format(n_test+1, self.N_TRAIN))
+            # Making a checkpoint from the initial state generated.         
+            self.env.load_checkpoint(init_checkpoint_env)
+            # Setting up vars to store costs
+            rollout_cost=0
+            rollout_cost_step=[]
+            # Making the progress bar
+            bar = tqdm.tqdm(range(self.env.moves_before_updating * self.N_STEPS), miniters=0)
+            for i in bar:
+                #Calls Rollout Strategy and returns action,qvalue
+                r_action, q_value = Rollout_gpu(
+                    self.env, 
+                    H=self.H_mode,
+                    alpha=self.alpha,
+                    epsilon=self.epsilon,
+                    K=self.K,
+                    lookahead=self.LOOKAHEAD,
+                    N_samples=self.N_SAMPLES,
+                    min_objective=self.min_obj,
+                    rg=self.rg)
+                #Update epsilon it goes from stochastic to deterministic 
+                self.epsilon = self.epsilon * self.epsilon_decay
+                #Calls Heuristic and return best action
+                To_H = dict()
+                To_H['env'] = self.env
+                To_H['observation'] = observation
+                h_action = self.H(To_H)
+                H_env = self.env.copy()
+                h_chckpt = H_env.make_checkpoint()
+                q_h_value = 0
+                for _ in range(self.N_SAMPLES):
+                    H_env.load_checkpoint(h_chckpt)
+                    aa = self.alpha
+                    traj_cost = 0
+                    for _ in range(self.K + self.LOOKAHEAD):
+                        _, h_cost, _, _ = H_env.step(h_action)
+                        traj_cost += aa*h_cost
+                        aa *= self.alpha
+                    q_h_value += traj_cost / self.N_SAMPLES
+                #Helicopter take an action based on Rollout strategy and heuristic
+                observation, ro_cost, _, _ = self.env.step(r_action)
+                #Update Rollout Total cost
+                rollout_cost += ro_cost  #Acumulative cost for rollout          
+                rollout_cost_step.append(rollout_cost)  #List of cost over time
+                #Generate a message
+                msg =    " |   |      |"
+                msg += "\n |   |      |-- Agent step {}".format(i)
+                msg += "\n |   |      |   |-- Rollout with action {} expected {} and cost : {}".format(r_action, q_value, ro_cost)
+                msg += "\n |   |      |   '-- Heuristic with action {} expected {}".format(h_action, q_h_value)
+                bar.write(msg)
+                self.logger(msg, False, False)
+            bar.close()
+            msg =    " |   |"
+            msg += "\n |   |-- Test {} results".format(n_test+1)
+            msg += "\n |       |-- Total Rollout cost : {}".format(rollout_cost)
+            msg += "\n |"
+            self.logger(msg)
+            #Costs p/test
+            RO_RESULTS.append(rollout_cost)
+            #Cumulative costs p/test
+            RO_RESULTS_C.append(rollout_cost_step)
+        msg = " | Ran done."
+        msg+= "\nMetadata: {}\n |".format(self.metadata_str)
+        self.logger(msg, True, True, True)
+
     def policy_test(self, N_TEST=5, N_STEPS=20, PI_MODE=None, EPSILON=None, GIF=True,
     GRAPH=True):
         """
@@ -746,22 +834,57 @@ class Experiment():
             self.frames_test_r += self.env.frames
             self.env.frames = []
             self.theres_test_gif = True
+            self.make_gif(TEST=True)
 
-    def run_multiple_LH(self, LHS = [1], GRAPH=True, dpi=200, save_arr=True):
+    def run_multiple_LH(self, LHS = [1], GRAPH=True, n_cols=2, dpi=200, save_arr=3600):
         """
         Creates an initial state from reseting the environment and runs all the number of train
         iterations and so on. This updates the policy with more states or with better actions.
 
         Parameters
         ----------
-        GIF : bool 
-            Variable to indicate if you desired to generate frames for the last 
-            train loop of the run, if the class was initialized with this behavior on this one
-            changes nothing. Default False.
+        LHS: list of ints
+            The list of lookaheads to run tests on them. 
         GRAPH : bool
             Draws and saves the graphs from the experiment. If there's not a graph generated and
-            one does not restarts the class 
+            one does not restarts the class
+        n_cols : int
+            Number of columns in which the graph for the individual accumulate cost will be displayed.
+        dpi : int
+            Quantity of desired pixels per inch in the saved graph.
+        save_arr : int
+            The ammount of seconds in which one desire to dump the actual values of the run on a
+            npy file. This is check every end of the Test.
         """
+        def GET_TCELL(ENVS, tree = True):
+            counts = []
+            for e in ENVS:
+                c = 0
+                for i in range(e.grid.shape[0]):
+                    for j in range(e.grid.shape[1]):
+                        if (e.grid[i,j] == e.tree) and tree:
+                            c += 1
+                        elif (e.grid[i,j] == e.fire) and not tree:
+                            c+=1
+                c = c / e.grid.shape[0] / e.grid.shape[1]
+                counts += [c]
+            return np.array(counts)
+
+        def DUMP_FILES(mod=''):
+            time_s = self.time_str()
+            f1 = open("./Logs/rollout COSTS_STEP LHS {} -- {}{}.npy".format(LHS, mod, time_s), 'wb')
+            np.save(f1, COSTS_STEP)
+            f1.close()
+            f2 = open("./Logs/rollout COSTS LHS {} -- {}{}.npy".format(LHS, mod, time_s), 'wb')
+            np.save(f2, COSTS)
+            f2.close()
+            f3 = open("./Logs/rollout RTCELL LHS {} -- {}{}.npy".format(LHS, mod, time_s), 'wb')
+            np.save(f3, END_R_TCELLS)
+            f3.close()
+            f4 = open("./Logs/rollout TCELL LHS {} -- {}{}.npy".format(LHS, mod, time_s), 'wb')
+            np.save(f4, END_TCELLS)      
+            f4.close()
+            self.logger("Numpy Arrays save on ./Logs with time {}".format(time_s), time=False)
         l_LHS = len(LHS)
         # Storing in 0 for the heuristic
         H_env = self.env.copy()
@@ -772,6 +895,12 @@ class Experiment():
         COSTS = np.zeros((l_LHS+1,self.N_TRAIN), dtype=np.float32)
         # Per step costs (LHS, N_TRAIN, TOT_STEPS)
         COSTS_STEP = np.zeros((l_LHS+1, self.N_TRAIN, self.env.moves_before_updating * self.N_STEPS), dtype=np.float32)
+        # Tree cells avg per experiment
+        INIT_TCELL = np.zeros((l_LHS + 1, self.N_TRAIN), dtype=np.float32)
+        END_TCELLS = INIT_TCELL.copy()
+        END_FCELLS = INIT_TCELL.copy()
+        END_R_TCELLS = END_TCELLS.copy()
+        #TCELLS = np.zeros(l_LHS + 1, dypet=np.float32) # ACCUMULATE AVG / (TRAN*STEP)
         CHECKPOINTS = []
         # Reseting env and storing the initial observations
         for i in range(l_LHS):
@@ -780,18 +909,31 @@ class Experiment():
         # making checkpoints
         for i in range(l_LHS + 1):
             CHECKPOINTS += [ENVS[i].make_checkpoint()]
-        # Measuring time of execution. 
+        # Measuring time of execution.
+        if save_arr > 0:
+            SAVE = True
+        else:
+            SAVE = False
+        start = Time.time()
         self.logger("Run for LHs {} - Metadata: {}\n |".format(LHS, self.metadata_str), True, True, True)
         # First loop to execute an rollout experiment.
         for n_test in range(self.N_TRAIN):
+            ## Checking time to make a dump file or not
+            if SAVE and ((Time.time() - start) > save_arr):
+                start = Time.time()
+                DUMP_FILES(mod='DUMP@{} '.format(n_test))
+            ## Making a checkpoint from the initial state generated.         
+            for i in range(l_LHS + 1):
+                ENVS[i].load_checkpoint(CHECKPOINTS[i])
+            # Saving initial number of cells.
+            init_test_tcells = GET_TCELL(ENVS)
+            INIT_TCELL[:,n_test] += init_test_tcells
+            end_test_fcells = np.zeros(l_LHS + 1,dtype=np.float32)
             # Sync the random generators
             M_SEED = int(self.rg.random()*10**4)
             for i in range(l_LHS + 1):
                 ENVS[i].rg = np.random.Generator(np.random.SFC64(M_SEED))
             self.logger(" |-- Test : {} of {}".format(n_test+1, self.N_TRAIN))
-            # Making a checkpoint from the initial state generated.         
-            for i in range(l_LHS + 1):
-                ENVS[i].load_checkpoint(CHECKPOINTS[i])
             # Setting up vars to store costs
             # Making the progress bar
             bar = tqdm.tqdm(range(self.env.moves_before_updating * self.N_STEPS), miniters=0)
@@ -828,6 +970,11 @@ class Experiment():
                 msg += "\n |   |      |   '-- Actions: {} Costs : {}".format(actions, COSTS_STEP[:, n_test, stp])
                 bar.write(msg)
                 self.logger(msg, False, False)
+                end_test_fcells += GET_TCELL(ENVS, False) / (self.env.moves_before_updating * self.N_STEPS)
+            end_test_cells = GET_TCELL(ENVS) 
+            END_TCELLS[:,n_test] += end_test_cells
+            END_FCELLS[:,n_test] += end_test_fcells
+            END_R_TCELLS[:, n_test] += end_test_cells/init_test_tcells
             bar.close()
             msg =    " |   |"
             msg += "\n |   |-- Test {} results".format(n_test+1)
@@ -838,25 +985,26 @@ class Experiment():
         msg+= "\nMetadata: {}\n |".format(self.metadata_str)
         self.logger(msg, True, True, True)
         time_s = Experiment.time_str()
+        # Averaging the results.
 
         if GRAPH:
             # Making graph here
             Experiment.check_dir("Runs")
 
             sns.set(context="paper", style="whitegrid")
-            n_cols = 2
             n_rows = math.ceil(l_LHS / n_cols)
             #fig = plt.figure(figsize=(3*n_cols,2*n_rows),dpi=dpi)
             fig, axs = plt.subplots(n_rows,n_cols, 
-                    figsize=(4*n_cols,3*n_rows),dpi=dpi,sharex=True, sharey=True,
+                    figsize=(2*n_cols+1,1.7*n_rows),dpi=dpi,sharex=True, sharey=True,
                     gridspec_kw={'hspace': 0, 'wspace': 0})
             fig.suptitle('Rollout Avg. {}/Step'.format(self.mod))
 
             # ASTHETICS
             y_ticks_rotation = 30
-            alpha_fill = 0.10
+            x_ticks_rotation = 15
+            alpha_fill = 0.25
             alpha_line = 0.8
-            alpha_p = 0.65
+            alpha_p = 0.5
             lw = 2
             l_h = "H_mode {}".format(self.H_mode)
             c_h = sns.xkcd_rgb['cobalt blue']
@@ -865,6 +1013,7 @@ class Experiment():
             mar_s_h = 0.8
             filled_markers = ('o', 'v', '^', '<', '>', '8', 's', 'p', '*', 'h', 'H', 'D', 'd', 'P', 'X')
             colors = sns.color_palette("husl", l_LHS + 1)
+            alpha_bl = 0.5
             # END
 
             # First graph - Avg. Cost per step of all test
@@ -873,6 +1022,7 @@ class Experiment():
             x_2 = range(1, self.N_TRAIN + 1)
             mean_h = np.mean(COSTS_STEP[0], axis=0)
             std_h = np.std(COSTS_STEP[0],axis=0)
+            evry = math.ceil(len(x_1)*0.04)
             
             for i in range(1, l_LHS+1):
                 ax = axs[(i-1)//n_cols,(i-1)%n_cols]
@@ -881,16 +1031,10 @@ class Experiment():
                 l = "Rollout LH {}".format(LHS[i-1])
                 c = colors[i]
                 m = filled_markers[i]
-                ax.plot(x_1, mean_h, label=l_h, alpha=alpha_h, color=c_h, lw=lw, ls='-.')
-                #ax.fill_between(x_1, mean_h-std_h, mean_h+std_h, alpha=alpha_fill_h, color=c_h)
-                ax.scatter(x_1, mean_h-std_h, s=mar_s_h, alpha=alpha_p, color=c_h, marker=filled_markers[0])
-                ax.scatter(x_1, mean_h+std_h, s=mar_s_h, alpha=alpha_p, color=c_h, marker=filled_markers[0])
+                ax.errorbar(x_1, mean_h,yerr=std_h,errorevery=evry, label=l_h, alpha=alpha_h, color=c_h, lw=lw//2, ls='-.')
                 ax.plot(x_1, mean, label=l, alpha=alpha_line, color=c, lw=lw)
                 ax.fill_between(x_1, mean-std, mean+std, alpha=alpha_fill, color=c)
-                #ax.scatter(x_1, mean-std, alpha=alpha_p, color=c, lw=pw, marker=m)
-                #ax.scatter(x_1, mean+std, alpha=alpha_p, color=c, lw=pw, marker=m)
                 ax.set(xlabel='Step', ylabel='Average '+ self.mod)
-                #ax.set_yticks(rotation=y_ticks_rotation)
                 ax.legend()
             for ax in axs.flat:
                 ax.label_outer()
@@ -900,7 +1044,7 @@ class Experiment():
 
             # Doing graph cost per test.
             # Cost per test
-            fig = plt.figure(figsize=(10,6),dpi=dpi)
+            fig = plt.figure(figsize=(5,3),dpi=dpi)
             for i in range(l_LHS + 1):
                 if i == 0:
                     l = "H_mode {}".format(self.H_mode)
@@ -920,15 +1064,60 @@ class Experiment():
                 "./Runs/Rollout cost-test LHS {} {} -- {}.png".format(LHS, self.metadata_str, time_s))
             plt.clf()
 
-        if save_arr:
-            f1 = open("./Logs/rollout COSTS_STEP LHS {} -- {}.npy".format(LHS, time_s), 'wb')
-            np.save(f1, COSTS_STEP)
-            f2 = open("./Logs/rollout COSTS LHS {} -- {}.npy".format(LHS, time_s), 'wb')
-            np.save(f2, COSTS)
-            f1.close()
-            f2.close()
-            self.logger("Numpy Arrays save on ./Logs with time {}".format(time_s), time=False)
+            # Doing Graph Forest perservation
+            c_tree = 'green'
+            c_fire = 'red'
+            c_ic = 'orange'
+            fig = plt.figure(figsize=(2+0.8*l_LHS, 3.3),dpi=dpi)
+            X3 = range(l_LHS + 1)
+            mean_i_cells = np.mean(INIT_TCELL, axis=1)
+            mean_e_cells = np.mean(END_TCELLS, axis=1)
+            std_e_cells = np.std(END_TCELLS, axis=1)
+            plt.plot(X3, mean_i_cells, label='Initial',ls='dashdot', color=c_ic)
+            plt.plot(X3, mean_e_cells, label='Final', color=c_tree)
+            plt.plot(X3, [mean_e_cells[0] for i in X3], color=c_tree, ls="--", 
+                    alpha=alpha_bl, label="H-baseline")
+            plt.fill_between(X3, mean_e_cells - std_e_cells, mean_e_cells + std_e_cells, 
+                            alpha=alpha_fill, color=c_tree)
+            plt.ylabel("Trees/Total Cells")
+            plt.xlabel("Lookahead")
+            labels = ['H']
+            for i in LHS:
+                labels.append(i)
+            plt.xticks(X3, labels)
+            plt.yticks(rotation=y_ticks_rotation)
+            #plt.xticks(rotation=x_ticks_rotation)
+            plt.legend()
+            plt.title("Forest Perservation Average Area - H_mode {}".format(self.H_mode))
+            plt.savefig(
+                "./Runs/Rollout TCELL LHS {} {} -- {}.png".format(LHS, self.metadata_str, time_s))
+            plt.clf()
 
+            #Graph fire density
+            fig = plt.figure(figsize=(2+0.8*l_LHS, 3.3),dpi=dpi)
+            mean_e_cells = np.mean(END_FCELLS, axis=1)
+            std_e_cells = np.std(END_FCELLS, axis=1)
+            plt.plot(X3, 100*mean_e_cells, color=c_fire, label='Fire')
+            plt.plot(X3, [mean_e_cells[0]*100 for i in X3], color=c_fire, ls="--", 
+                    alpha=alpha_bl, label='H-baseline')
+            plt.fill_between(X3, 100*(mean_e_cells - std_e_cells), 100*(mean_e_cells + std_e_cells), 
+                            alpha=alpha_fill, color=c_fire)
+            plt.ylabel("Fire Density (%)")
+            plt.xlabel("Lookahead")
+            labels = ['H']
+            for i in LHS:
+                labels.append(i)
+            plt.xticks(X3, labels)
+            plt.yticks(rotation=y_ticks_rotation)
+            #plt.xticks(rotation=x_ticks_rotation)
+            plt.legend()
+            plt.title("Wildland Average Fire Density - H_mode {}".format(self.H_mode))
+            plt.savefig(
+                "./Runs/Rollout FCELL LHS {} {} -- {}.png".format(LHS, self.metadata_str, time_s))
+            plt.clf()
+
+        if True:
+            DUMP_FILES()
         return None
 
     def make_graph(self, title_head='',mod='Cost',dpi=200):
@@ -1166,8 +1355,8 @@ class Experiment():
 
     @property
     def metadata_str(self):
-        msg = "LH-{} K-{} H_mode-{} N_SAMPLES-{}  ALPHA-{} EPSILON-{} E_DECAY-{}".format(
-            self.LOOKAHEAD, self.K, self.H_mode, self.N_SAMPLES, self.alpha, 
+        msg = "LH-{} K-{} H_mode-{} C_mode-{} N_SAMPLES-{}  ALPHA-{} EPSILON-{} E_DECAY-{}".format(
+            self.LOOKAHEAD, self.K, self.H_mode, self.env.reward_type, self.N_SAMPLES, self.alpha, 
             self.epsilon_op, self.epsilon_decay)
         return msg
 

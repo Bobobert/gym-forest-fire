@@ -13,17 +13,22 @@ This fork uses a modified version from the the gym environment(https://github.co
 
 ## Class Experiment
 Using the class Experiment from the rollout.py makes easier and clean to set-up the test for the heuristics to run. In this version, you need two versions of the heuristic. One provided as a class or fuction, and another programmed on the rollout_sampler_gpu.py
-### Experiment.make_gif()
-Automatic gif archives generation from runs or tests.
 
-![](pics/run_rollout_0.gif)
-![](pics/run_heuristic_0.gif)
+### Experiment.run()
+One can run a test with the given paramenters. Eacch run has an unique start state from which it calculatess the averages  from applying the heuristic and the rollout agent to the environment
 
-
-### Each run generates automatic logs and graphs
+#### Each run generates automatic logs and graphs
 
 ![](pics/a_graph.png)
 ![](pics/a_second_graph.png)
+
+#### Automatic gif archives generation from runs or tests passing GIF=True.
+
+![](pics/run_rollout_1.gif)
+![](pics/run_heuristic_1.gif)
+
+
+
 
 
 

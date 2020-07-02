@@ -32,7 +32,6 @@ class R_ITER():
     Min_obj : bool
         If one wants the sampler to compare the costs with minimization or maximization
     """
-    
     def __init__(self, env, H, N_workers, alpha, K, lookahead, 
                     N_samples, Action_set=None, H_args=None, Min_obj=True):
             self.env = env
@@ -77,7 +76,6 @@ class R_ITER():
                     chunck_trayectories += [branch]
             self.all_trayectories += [chunck_trayectories]
         return True
-
     @property
     def _update_iter_(self):
         # A recursive counter
@@ -93,14 +91,12 @@ class R_ITER():
             self.t_pos[self.j] = 0
             self.j -= 1
             self._update_iter_
-
     def __iter__(self):
         # iterable method
         if not self.done:
             self.done = self._construct_
         self.i = 0
         return self
-
     def __next__(self):
         if self.i == self.cpus:
             raise StopIteration
@@ -117,7 +113,6 @@ class R_ITER():
             }
             self.i += 1
             return To_H
-
     def __del__(self):
         return None
 
